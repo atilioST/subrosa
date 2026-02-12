@@ -15,6 +15,12 @@ Generate a comprehensive briefing on Scout engineering activity covering Slack, 
 
 **Scout Channels to Scan:**
 
+**Customer Pilots (HIGH PRIORITY):**
+- scout-pilot-rwe
+- scout-pilot-enfinity
+- scout-pilot-evyve
+- scout-pilot-powerhouse
+
 Core Subsystems:
 - scout-product-compass
 - scout-product-missions
@@ -40,6 +46,7 @@ Cross-functional:
 - Query: `project = SCOUT AND updated >= -2d ORDER BY updated DESC`
 - Focus on: status changes, new issues, blockers, items moving to Code Review
 - Note assignees and which team they're on (use team.json)
+- **Important**: Scout uses fully Kanban CI/CD (no sprints) — track flow, not sprint velocity
 
 **GitHub Activity:**
 - Check open PRs via `gh pr list --repo sitetracker/scout --limit 20`
@@ -53,12 +60,14 @@ Start with **TOP PRIORITY** section if there are:
 - Red alerts or errors
 - Blockers flagged in Jira
 - PRs waiting >5 days for review
+- Customer pilot activity or issues
 
 Then organize by:
-1. **Slack Highlights** — channel by channel, only if activity found
-2. **Jira Activity** — tickets updated in last 2 days
-3. **GitHub PRs** — open PRs by team
-4. **Risks/Blockers** — anything flagged
+1. **Customer Pilots** — activity in pilot channels (always report if present)
+2. **Slack Highlights** — channel by channel, only if activity found
+3. **Jira Activity** — tickets updated in last 2 days
+4. **GitHub PRs** — open PRs by team
+5. **Risks/Blockers** — anything flagged
 
 **Formatting:**
 - Lead with most important information
