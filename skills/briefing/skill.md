@@ -39,6 +39,7 @@ Operations:
 - scout-aws-finance
 
 Cross-functional:
+- scout (CRITICAL — company-wide interface to Scout)
 - support-general
 - rd-scout-all
 
