@@ -64,6 +64,55 @@ async def _briefing_job(
         await store.log_diagnostic("scheduler", f"briefing_{kind} error", level="error")
 
 
+async def _skill_job(
+    agent: Agent,
+    bot: TelegramBot,
+    store: Store,
+    health: Health,
+    config: Config,
+    skill_name: str,
+) -> None:
+    """Execute a scheduled skill."""
+    if bot.is_silenced:
+        logger.info("Skill %s skipped — silenced", skill_name)
+        return
+
+    try:
+        from .skills import load_skill
+        skill = load_skill(skill_name)
+
+        if not skill:
+            logger.error("Skill not found: %s", skill_name)
+            return
+
+        from .context import build_system_prompt
+        system_prompt = build_system_prompt(config.briefing_path)
+
+        response = await asyncio.wait_for(
+            agent.invoke(skill.instruction, system_prompt, trace_name=f"skill-{skill_name}"),
+            timeout=config.briefing_timeout,
+        )
+        health.record_agent()
+
+        if not response.is_error:
+            await bot.send_to_chat(config.chat_id, response.text)
+
+        await store.log_event(
+            source="scheduler", event_type=f"skill_{skill_name}",
+            summary=f"{skill_name} skill",
+            content=response.text[:500],
+        )
+
+    except asyncio.TimeoutError:
+        logger.warning("Skill %s timed out", skill_name)
+        await bot.send_to_chat(config.chat_id, f"Skill '{skill_name}' timed out.")
+        await store.log_diagnostic("scheduler", f"skill_{skill_name} timeout", level="warning")
+    except Exception:
+        logger.exception("Skill %s failed", skill_name)
+        await bot.send_to_chat(config.chat_id, f"Skill '{skill_name}' failed.")
+        await store.log_diagnostic("scheduler", f"skill_{skill_name} error", level="error")
+
+
 async def _monitoring_job(
     agent: Agent,
     bot: TelegramBot,
@@ -178,6 +227,21 @@ class Scheduler:
                 kwargs=common,
                 id="monitoring_poll", replace_existing=True,
             )
+
+        # Skill schedules
+        from .skills import get_skill_schedules
+        skill_schedules = get_skill_schedules()
+
+        for skill_name, schedules in skill_schedules.items():
+            for label, cron_expr in schedules.items():
+                job_id = f"skill_{skill_name}_{label}"
+                self._scheduler.add_job(
+                    _skill_job,
+                    CronTrigger.from_crontab(cron_expr, timezone=tz),
+                    kwargs={**common, "skill_name": skill_name},
+                    id=job_id, replace_existing=True,
+                )
+                logger.info("Scheduled skill: %s (%s) — %s", skill_name, label, cron_expr)
 
         logger.info(
             "Schedule: morning=%s, noon=%s, evening=%s, monitoring=%s (%s-%s %s)",

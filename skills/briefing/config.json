@@ -1,0 +1,7 @@
+{
+  "name": "briefing",
+  "triggers": ["/briefing", "/brief"],
+  "description": "Generate Scout engineering briefing from Slack, Jira, and GitHub activity",
+  "context_files": ["skill.md"],
+  "auto_inject": false
+}

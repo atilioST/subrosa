@@ -261,6 +261,14 @@ class TelegramBot:
         await self._process_message(chat_id, text, media_files=media_files)
 
     async def _process_message(self, chat_id: int, text: str, media_files: list[dict] | None = None) -> None:
+        # Check for skill trigger
+        if text.startswith("/") and not media_files:
+            from .skills import find_skill_by_trigger
+            skill = find_skill_by_trigger(text.split()[0])
+            if skill:
+                await self._execute_skill(chat_id, skill)
+                return
+
         # Status bypass
         if self._is_status_check(text) and not media_files:
             await self._reply_inline_status(chat_id)
@@ -281,6 +289,29 @@ class TelegramBot:
 
         await self._do_process(chat_id, text, media_files)
         await self._drain_queue()
+
+    async def _execute_skill(self, chat_id: int, skill) -> None:
+        """Execute a skill and send response."""
+        indicator = WorkingIndicator(self._app.bot, chat_id)
+        try:
+            await indicator.start()
+            from .context import build_system_prompt
+            system_prompt = build_system_prompt(self._config.briefing_path)
+
+            # Inject skill instruction as user prompt
+            response = await asyncio.wait_for(
+                self._agent.invoke(skill.instruction, system_prompt, trace_name=f"skill-{skill.name}"),
+                timeout=self._config.briefing_timeout,
+            )
+            self._health.record_agent()
+            await indicator.finalize(response.text)
+        except asyncio.TimeoutError:
+            await indicator.delete()
+            await send_message(self._app.bot, chat_id, f"Skill '{skill.name}' timed out.")
+        except Exception:
+            logger.exception("Skill execution failed: %s", skill.name)
+            await indicator.delete()
+            await send_message(self._app.bot, chat_id, f"Failed to execute skill '{skill.name}'.")
 
     def _is_status_check(self, text: str) -> bool:
         n = text.strip().lower().rstrip("?!.")

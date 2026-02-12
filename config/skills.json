@@ -1,0 +1,10 @@
+{
+  "enabled": ["briefing"],
+  "schedules": {
+    "briefing": {
+      "morning": "0 7 * * *",
+      "noon": "0 12 * * *",
+      "evening": "0 18 * * *"
+    }
+  }
+}
