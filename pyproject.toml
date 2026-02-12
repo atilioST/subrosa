@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "subrosa1"
+version = "2.0.0"
+description = "Personal AI chief-of-staff agent — clean architecture rewrite"
+requires-python = ">=3.11"
+dependencies = [
+    "claude-agent-sdk>=0.1.33",
+    "python-telegram-bot>=21.0",
+    "aiosqlite>=0.20.0",
+    "apscheduler>=3.10,<4.0",
+    "python-dotenv>=1.0",
+    "langfuse>=3.0.0",
+    "sentence-transformers>=2.2.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.scripts]
+subrosa1 = "subrosa1.app:main"
+subrosa1-cli = "subrosa1.cli:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

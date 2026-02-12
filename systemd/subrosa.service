@@ -1,0 +1,17 @@
+[Unit]
+Description=Subrosa AI Chief of Staff
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ati/Dev/subrosa1
+EnvironmentFile=/home/ati/.subrosa/.env
+ExecStart=/home/ati/Dev/subrosa1/.venv/bin/python -m subrosa1
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

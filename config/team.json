@@ -1,0 +1,318 @@
+{
+  "org": {
+    "name": "Scout Engineering",
+    "leader": "Atilio Jobson",
+    "size": 30
+  },
+  "leadership": [
+    {
+      "name": "Brock",
+      "role": "CTO",
+      "reports_to": null,
+      "slack_handle": "brock",
+      "jira_name": "Brock",
+      "github_handle": "sitetrackerbrock",
+      "email": null,
+      "direct_reports": ["Atilio Jobson", "Walter Thorn", "Bailee Warsing"]
+    },
+    {
+      "name": "Atilio Jobson",
+      "role": "VP Engineering",
+      "reports_to": "Brock",
+      "slack_handle": "atilio",
+      "jira_name": "Atilio Jobson",
+      "github_handle": "atilioST",
+      "email": "atilio@sitetracker.com"
+    },
+    {
+      "name": "Mohamed Seliman",
+      "role": "Engineering Manager",
+      "reports_to": "Atilio Jobson",
+      "slack_handle": "mseliman",
+      "jira_name": "Mohamed Seliman",
+      "github_handle": null,
+      "email": "mseliman@sitetracker.com"
+    },
+    {
+      "name": "Himanshu Patel",
+      "role": "Engineering Manager",
+      "reports_to": "Atilio Jobson",
+      "slack_handle": "hpatel",
+      "jira_name": "Himanshu Patel",
+      "github_handle": "himanshust",
+      "email": "hpatel@sitetracker.com"
+    },
+    {
+      "name": "Walter Thorn",
+      "role": "Product Manager",
+      "reports_to": "Brock",
+      "slack_handle": "wthorn",
+      "jira_name": "Walter Thorn",
+      "github_handle": null,
+      "email": "wthorn@sitetracker.com",
+      "direct_reports": ["Nathan Zorndorf"]
+    },
+    {
+      "name": "Bailee Warsing",
+      "role": "Design Manager",
+      "reports_to": "Brock",
+      "slack_handle": "bwarsing",
+      "jira_name": "Bailee Warsing",
+      "github_handle": "bwarsingsitetracker",
+      "email": "bwarsing@sitetracker.com",
+      "direct_reports": ["Brittney Cruz"]
+    }
+  ],
+  "teams": [
+    {
+      "name": "Incubus",
+      "lead": "Geoff Manning",
+      "members": [
+        {
+          "name": "Geoff Manning",
+          "role": "Tech Lead",
+          "reports_to": "Atilio Jobson",
+          "slack_handle": "gmanning",
+          "jira_name": "Geoff Manning",
+          "github_handle": "gmanningsitetracker",
+          "email": "gmanning@sitetracker.com"
+        },
+        {
+          "name": "Hugo Mencoboni",
+          "role": "Engineer",
+          "reports_to": "Geoff Manning",
+          "slack_handle": "hmencoboni",
+          "jira_name": "Hugo Mencoboni",
+          "github_handle": "HugoMencoboniSpiria",
+          "email": "hmencoboni@spiria.com"
+        },
+        {
+          "name": "Mike Behan",
+          "role": "Engineer",
+          "reports_to": "Geoff Manning",
+          "slack_handle": "mbehan",
+          "jira_name": "Mike Behan",
+          "github_handle": "mbehan39",
+          "email": "mbehan@sitetracker.com"
+        }
+      ]
+    },
+    {
+      "name": "Pink Floyd",
+      "lead": "Jared Onnen",
+      "members": [
+        {
+          "name": "Jared Onnen",
+          "role": "Tech Lead",
+          "reports_to": "Atilio Jobson",
+          "slack_handle": "jonnen",
+          "jira_name": "jonnen",
+          "github_handle": "jronnen",
+          "email": "jonnen@sitetracker.com"
+        },
+        {
+          "name": "Abe Dolinger",
+          "role": "Engineer",
+          "reports_to": "Jared Onnen",
+          "slack_handle": "adolinger",
+          "jira_name": "Abe Dolinger",
+          "github_handle": "abedolinger",
+          "email": "adolinger@sitetracker.com"
+        },
+        {
+          "name": "Alistair Stark",
+          "role": "Engineer",
+          "reports_to": "Jared Onnen",
+          "slack_handle": "astark",
+          "jira_name": "Alistair Stark",
+          "github_handle": "AlistairStarkSpiria",
+          "email": "astark@spiria.com"
+        }
+      ]
+    },
+    {
+      "name": "The Killers",
+      "lead": "Roberto Moller",
+      "members": [
+        {
+          "name": "Roberto Moller",
+          "role": "Tech Lead",
+          "reports_to": "Himanshu Patel",
+          "slack_handle": "rmoller",
+          "jira_name": "Roberto Moller",
+          "github_handle": "robimoller",
+          "email": "rmoller@sitetracker.com"
+        },
+        {
+          "name": "Jemil Srejic",
+          "role": "Engineer",
+          "reports_to": "Roberto Moller",
+          "slack_handle": "jsrejic",
+          "jira_name": "Jemil Srejic",
+          "github_handle": "Jsrejic",
+          "email": "jsrejic@sitetracker.com"
+        },
+        {
+          "name": "Hager Shahin",
+          "role": "Engineer",
+          "reports_to": "Roberto Moller",
+          "slack_handle": "hshahin",
+          "jira_name": "Hager Shahin",
+          "github_handle": "hagershahin",
+          "email": "hshahin@sitetracker.com"
+        },
+        {
+          "name": "Michael Eini",
+          "role": "Engineer",
+          "reports_to": "Roberto Moller",
+          "slack_handle": "meini",
+          "jira_name": "michael eini",
+          "github_handle": "MichaelSiteT",
+          "email": "meini@sitetracker.com"
+        }
+      ]
+    },
+    {
+      "name": "B-52s",
+      "lead": "Sean Glover",
+      "members": [
+        {
+          "name": "Sean Glover",
+          "role": "Tech Lead",
+          "reports_to": "Himanshu Patel",
+          "slack_handle": "sglover",
+          "jira_name": "sglover",
+          "github_handle": "stSglover",
+          "email": "sglover@sitetracker.com"
+        },
+        {
+          "name": "Tom Sziler",
+          "role": "Engineer",
+          "reports_to": "Sean Glover",
+          "slack_handle": "tsziler",
+          "jira_name": "Tom Sziler",
+          "github_handle": "tsziler",
+          "email": "tsziler@sitetracker.com"
+        },
+        {
+          "name": "Uma Potla",
+          "role": "Engineer",
+          "reports_to": "Sean Glover",
+          "slack_handle": "upotla",
+          "jira_name": "Uma Potla",
+          "github_handle": "upotla",
+          "email": "upotla@sitetracker.com"
+        }
+      ]
+    },
+    {
+      "name": "RHCP",
+      "lead": "Jake Cuevas",
+      "members": [
+        {
+          "name": "Jake Cuevas",
+          "role": "Tech Lead",
+          "reports_to": "Himanshu Patel",
+          "slack_handle": "jcuevas",
+          "jira_name": "Jake Cuevas",
+          "github_handle": null,
+          "email": "jcuevas@sitetracker.com"
+        },
+        {
+          "name": "Kyle Morand",
+          "role": "Engineer",
+          "reports_to": "Jake Cuevas",
+          "slack_handle": "kmorand",
+          "jira_name": "Kyle Morand",
+          "github_handle": "kylesitetracker",
+          "email": "kmorand@sitetracker.com"
+        },
+        {
+          "name": "Santiago Blason",
+          "role": "Engineer",
+          "reports_to": "Jake Cuevas",
+          "slack_handle": "sblason",
+          "jira_name": "Santiago Blason",
+          "github_handle": "sblasonstk",
+          "email": "sblason@sitetracker.com"
+        }
+      ]
+    },
+    {
+      "name": "Queen",
+      "lead": "Yuval Klein",
+      "members": [
+        {
+          "name": "Yuval Klein",
+          "role": "Tech Lead",
+          "reports_to": "Himanshu Patel",
+          "slack_handle": "yklein",
+          "jira_name": "Yuval Klein",
+          "github_handle": "styklein",
+          "email": "yklein@sitetracker.com",
+          "notes": "Prefers local-work-until-PR-ready workflow"
+        },
+        {
+          "name": "Neeraj Nema",
+          "role": "Engineer",
+          "reports_to": "Yuval Klein",
+          "slack_handle": "nnema",
+          "jira_name": "Neeraj Nema",
+          "github_handle": "neerajstrk",
+          "email": "nnema@sitetracker.com"
+        },
+        {
+          "name": "Evgeny Issakovic",
+          "role": "Engineer",
+          "reports_to": "Yuval Klein",
+          "slack_handle": "eissakovic",
+          "jira_name": "Evgeny Issakovic",
+          "github_handle": "eissakovic",
+          "email": "eissakovic@sitetracker.com"
+        }
+      ]
+    }
+  ],
+  "product": [
+    {
+      "name": "Nathan Zorndorf",
+      "role": "Product Manager",
+      "reports_to": "Walter Thorn",
+      "slack_handle": "nzorndorf",
+      "jira_name": "Nathan Zorndorf",
+      "github_handle": "nzorndorf",
+      "email": "nzorndorf@sitetracker.com"
+    }
+  ],
+  "qa": [
+    {
+      "name": "Luke Chavez",
+      "role": "QA Engineer",
+      "reports_to": "Himanshu Patel",
+      "slack_handle": "lchavez",
+      "jira_name": "Luke T Chavez",
+      "github_handle": "lchavezST",
+      "email": "lchavez@sitetracker.com"
+    },
+    {
+      "name": "Akanksha Shrivastava",
+      "role": "QA Engineer",
+      "reports_to": "Himanshu Patel",
+      "slack_handle": "ashrivastava",
+      "jira_name": "Akanksha Shrivastava",
+      "github_handle": null,
+      "email": "ashrivastava@sitetracker.com"
+    }
+  ],
+  "design": [
+    {
+      "name": "Brittney Cruz",
+      "role": "Designer",
+      "reports_to": "Bailee Warsing",
+      "slack_handle": "bcruz",
+      "jira_name": "Brittney Cruz",
+      "github_handle": "bcruzsitetracker",
+      "email": "bcruz@sitetracker.com"
+    }
+  ]
+}
