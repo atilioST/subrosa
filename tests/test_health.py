@@ -1,7 +1,7 @@
 """Tests for health tracking."""
 
 import time
-from subrosa1.health import Health
+from subrosa.health import Health
 
 
 def test_initial_state():

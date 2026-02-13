@@ -2,7 +2,7 @@
 
 ## What This Is
 
-Subrosa1 is a ground-up rewrite of Subrosa — a personal AI chief-of-staff agent for Atilio.
+Subrosa is a personal AI chief-of-staff agent for Atilio.
 It monitors Slack, Jira, and GitHub via MCP servers, generates daily briefings, and communicates through Telegram.
 
 ## Architecture
@@ -24,12 +24,15 @@ It monitors Slack, Jira, and GitHub via MCP servers, generates daily briefings, 
 ## Running
 
 ```bash
-python -m subrosa1.app        # or: subrosa1
+python -m subrosa       # or: subrosa
+subrosa-cli             # CLI REPL mode
 ```
+
+The systemd service runs: `python -m subrosa` as user `ati` with env from `~/.subrosa/.env`.
 
 ## Configuration
 
-Same config files as subrosa, in `~/.subrosa/`:
+All config lives in `~/.subrosa/`:
 - `.env` — secrets
 - `config.toml` — app config
 - `mcp.json` — MCP server definitions

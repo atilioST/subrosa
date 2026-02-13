@@ -5,13 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from subrosa1.agent import Agent
-from subrosa1.config import Config
-from subrosa1.health import Health
-from subrosa1.memory import MemoryExtractor
-from subrosa1.scheduler import Scheduler
-from subrosa1.store import Store
-from subrosa1.telegram import TelegramBot
+from subrosa.agent import Agent
+from subrosa.config import Config
+from subrosa.health import Health
+from subrosa.memory import MemoryExtractor
+from subrosa.scheduler import Scheduler
+from subrosa.store import Store
+from subrosa.telegram import TelegramBot
 
 
 @pytest.fixture
@@ -51,18 +51,18 @@ def agent(config):
 
 
 def test_all_modules_import():
-    """Every module in subrosa1 should import cleanly."""
-    import subrosa1.app
-    import subrosa1.agent
-    import subrosa1.config
-    import subrosa1.context
-    import subrosa1.health
-    import subrosa1.media
-    import subrosa1.memory
-    import subrosa1.prompt
-    import subrosa1.scheduler
-    import subrosa1.store
-    import subrosa1.telegram
+    """Every module in subrosa should import cleanly."""
+    import subrosa.app
+    import subrosa.agent
+    import subrosa.config
+    import subrosa.context
+    import subrosa.health
+    import subrosa.media
+    import subrosa.memory
+    import subrosa.prompt
+    import subrosa.scheduler
+    import subrosa.store
+    import subrosa.telegram
 
 
 def test_wiring(config, store, health, agent):
@@ -158,7 +158,7 @@ async def test_store_full_lifecycle(tmp_path):
 @pytest.mark.asyncio
 async def test_memory_explicit_flow(tmp_path):
     """Explicit memory request → store → retrieve."""
-    from subrosa1.memory import detect_explicit_memory_request, create_explicit_memory
+    from subrosa.memory import detect_explicit_memory_request, create_explicit_memory
 
     store = Store(db_path=tmp_path / "mem.db")
     await store.initialize()
@@ -174,7 +174,7 @@ async def test_memory_explicit_flow(tmp_path):
     assert "brock" in mem["subject"].lower()
 
     # Retrieve via context
-    from subrosa1.context import retrieve_relevant_memories
+    from subrosa.context import retrieve_relevant_memories
     results = await retrieve_relevant_memories(store, "Who is the PM for Scout?", known_topics=["scout"])
     assert len(results) >= 1
 

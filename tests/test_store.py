@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from subrosa1.store import Store
+from subrosa.store import Store
 
 
 @pytest.fixture

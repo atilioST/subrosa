@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "subrosa1"
+name = "subrosa"
 version = "2.0.0"
 description = "Personal AI chief-of-staff agent — clean architecture rewrite"
 requires-python = ">=3.11"
@@ -19,8 +19,8 @@ dependencies = [
 ]
 
 [project.scripts]
-subrosa1 = "subrosa1.app:main"
-subrosa1-cli = "subrosa1.cli:main"
+subrosa = "subrosa.app:main"
+subrosa-cli = "subrosa.cli:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

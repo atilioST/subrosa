@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from subrosa1.context import (
+from subrosa.context import (
     build_system_prompt,
     build_monitoring_prompt,
     format_memories_for_prompt,
@@ -15,7 +15,7 @@ from subrosa1.context import (
     _score_topic_match,
     _score_subject_match,
 )
-from subrosa1.store import Store
+from subrosa.store import Store
 
 
 def run(coro):
@@ -89,7 +89,7 @@ def store():
 
 
 def test_build_user_prompt(store):
-    from subrosa1.context import build_user_prompt
+    from subrosa.context import build_user_prompt
     # Save some memories first
     run(store.save_memory(subject="Compass", content="Navigation feature", topic_type="project", tags=["compass"]))
 

@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/ati/Dev/subrosa1
+WorkingDirectory=/home/ati/Dev/subrosa
 EnvironmentFile=/home/ati/.subrosa/.env
-ExecStart=/home/ati/Dev/subrosa1/.venv/bin/python -m subrosa1
+ExecStart=/home/ati/Dev/subrosa/.venv/bin/python -m subrosa
 Restart=always
 RestartSec=10
 StandardOutput=journal

@@ -6,14 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from subrosa1.memory import (
+from subrosa.memory import (
     detect_explicit_memory_request,
     create_explicit_memory,
     _detect_type,
     _extract_subject,
     _extract_topics,
 )
-from subrosa1.store import Store
+from subrosa.store import Store
 
 
 def test_detect_explicit_remember():

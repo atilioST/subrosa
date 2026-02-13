@@ -1,6 +1,6 @@
 """Tests for media formatting."""
 
-from subrosa1.media import format_media_for_prompt
+from subrosa.media import format_media_for_prompt
 
 
 def test_format_empty():

@@ -4,7 +4,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from subrosa1.config import Config, load_config, _resolve_env_vars
+from subrosa.config import Config, load_config, _resolve_env_vars
 
 
 def test_resolve_env_vars():

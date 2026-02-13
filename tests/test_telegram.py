@@ -1,6 +1,6 @@
 """Tests for telegram helpers."""
 
-from subrosa1.telegram import split_message, _markdown_to_html, _strip_html, WorkingIndicator
+from subrosa.telegram import split_message, _markdown_to_html, _strip_html, WorkingIndicator
 
 
 def test_split_short_message():

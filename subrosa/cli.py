@@ -193,7 +193,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
         level=logging.WARNING,
     )
-    logging.getLogger("subrosa1.agent").setLevel(logging.INFO)
+    logging.getLogger("subrosa.agent").setLevel(logging.INFO)
 
     try:
         asyncio.run(_repl())
