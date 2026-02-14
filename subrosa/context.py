@@ -6,10 +6,13 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .prompt import SYSTEM_PROMPT
 from .store import Store
+
+if TYPE_CHECKING:
+    from .procedures import ProcedureManager
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +273,26 @@ def format_memories_for_prompt(scored_memories: list[dict]) -> str:
     return "\n".join(sections)
 
 
+# ── Procedure formatting ──────────────────────────────────────────────────
+
+def format_procedures_for_prompt(procedures: list[dict]) -> str:
+    """Format matched procedures as a prompt section."""
+    if not procedures:
+        return ""
+
+    parts = ["## Relevant Procedures\n"]
+    for proc in procedures:
+        title = proc.get("title", "Untitled")
+        count = proc.get("success_count", 0)
+        body = proc.get("body", "")
+        parts.append(f"### {title} (used {count}x)")
+        if body:
+            parts.append(body)
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 # ── Task context for queries ────────────────────────────────────────────────
 
 async def _get_task_context(query: str, store: Store) -> str | None:
@@ -306,8 +329,9 @@ async def build_user_prompt(
     max_memories: int = 10,
     max_memory_tokens: int = 2000,
     media_files: list[dict] | None = None,
+    procedure_manager: ProcedureManager | None = None,
 ) -> str:
-    """Assemble user prompt with memory context, task context, and media."""
+    """Assemble user prompt with memory context, procedures, task context, and media."""
     parts = []
 
     # Memory
@@ -320,6 +344,16 @@ async def build_user_prompt(
             parts.append(section)
     except Exception:
         logger.warning("Memory retrieval failed", exc_info=True)
+
+    # Procedures
+    if procedure_manager:
+        try:
+            procedures = await procedure_manager.find_relevant(user_message)
+            proc_section = format_procedures_for_prompt(procedures)
+            if proc_section:
+                parts.append(proc_section)
+        except Exception:
+            logger.warning("Procedure retrieval failed", exc_info=True)
 
     # Tasks
     try:

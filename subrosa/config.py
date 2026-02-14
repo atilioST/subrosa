@@ -50,7 +50,8 @@ class Config:
     monitoring_interval_minutes: int = 30
     work_hours_start: str = "07:00"
     work_hours_end: str = "19:00"
-    timezone: str = "America/Chicago"
+    timezone: str = "America/Denver"
+    weekdays_only: bool = False
 
     # Monitoring scope
     slack_channels: list[str] = field(default_factory=list)
@@ -66,6 +67,14 @@ class Config:
     known_topics: list[str] = field(default_factory=lambda: [
         "scout", "compass", "missions", "sdlc", "subrosa",
     ])
+
+    # Procedures
+    procedures_enabled: bool = True
+    reflection_model: str = "haiku"
+    min_tool_calls: int = 3
+    procedure_similarity_threshold: float = 0.5
+    procedure_update_threshold: float = 0.7
+    max_procedures_per_prompt: int = 2
 
     # Context
     max_recent_messages: int = 5
@@ -101,6 +110,7 @@ def load_config(path: Path | None = None) -> Config:
     lf = raw.get("langfuse", {})
     br = raw.get("briefing", {})
     mem = raw.get("memory", {})
+    proc = raw.get("procedures", {})
     ctx = raw.get("context", {})
     log = raw.get("logging", {})
 
@@ -120,7 +130,8 @@ def load_config(path: Path | None = None) -> Config:
         monitoring_interval_minutes=sched.get("monitoring_interval_minutes", 30),
         work_hours_start=work_hours.get("start", "07:00"),
         work_hours_end=work_hours.get("end", "19:00"),
-        timezone=sched.get("timezone", "America/Chicago"),
+        timezone=sched.get("timezone", "America/Denver"),
+        weekdays_only=sched.get("weekdays_only", False),
         slack_channels=mon.get("slack_channels", []),
         jira_projects=mon.get("jira_projects", []),
         github_repos=mon.get("github_repos", []),
@@ -132,6 +143,12 @@ def load_config(path: Path | None = None) -> Config:
         known_topics=mem.get("known_topics", [
             "scout", "compass", "missions", "sdlc", "subrosa",
         ]),
+        procedures_enabled=proc.get("enabled", True),
+        reflection_model=proc.get("reflection_model", "haiku"),
+        min_tool_calls=proc.get("min_tool_calls", 3),
+        procedure_similarity_threshold=proc.get("similarity_threshold", 0.5),
+        procedure_update_threshold=proc.get("update_threshold", 0.7),
+        max_procedures_per_prompt=proc.get("max_per_prompt", 2),
         max_recent_messages=ctx.get("max_recent_messages", 5),
         langfuse_public_key=lf.get("public_key", ""),
         langfuse_secret_key=lf.get("secret_key", ""),

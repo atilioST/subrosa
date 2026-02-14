@@ -32,6 +32,7 @@ class AgentResponse:
     num_turns: int = 0
     is_error: bool = False
     tools_used: list[str] = field(default_factory=list)
+    narration: str = ""
 
 
 class Agent:
@@ -151,4 +152,5 @@ class Agent:
             num_turns=result.num_turns,
             is_error=result.is_error,
             tools_used=tools_used,
+            narration=full_text,
         )

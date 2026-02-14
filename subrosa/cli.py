@@ -18,6 +18,7 @@ from .memory import (
     create_explicit_memory,
     detect_explicit_memory_request,
 )
+from .procedures import ProcedureManager
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,15 @@ async def _repl() -> None:
     health = Health()
     agent = Agent(model=config.model, max_turns=config.max_turns)
     system_prompt = build_system_prompt(config.briefing_path)
+
+    procedure_manager = ProcedureManager(
+        store=store,
+        reflection_model=config.reflection_model,
+        min_tool_calls=config.min_tool_calls,
+        similarity_threshold=config.procedure_similarity_threshold,
+        update_threshold=config.procedure_update_threshold,
+        max_per_prompt=config.max_procedures_per_prompt,
+    ) if config.procedures_enabled else None
 
     print(f"{_BOLD}Subrosa CLI{_RESET}")
     print(f"{_DIM}Commands: /briefing, /status, /remember, /memories, /forget, /tasks, /quit{_RESET}\n")
@@ -162,6 +172,16 @@ async def _repl() -> None:
             print(f"{_DIM}{mem['content']}{_RESET}\n")
             continue
 
+        # Check for explicit procedure save
+        if procedure_manager:
+            from .procedures import detect_procedure_request
+            if detect_procedure_request(text):
+                if procedure_manager.schedule_reflection():
+                    print(f"\n{_CYAN}Reflecting on our last interaction and saving a procedure...{_RESET}\n")
+                else:
+                    print(f"\n{_DIM}Nothing recent to save — try after a complex task.{_RESET}\n")
+                continue
+
         # Build prompt and invoke
         print(f"{_DIM}Thinking...{_RESET}")
         user_prompt = await build_user_prompt(
@@ -169,6 +189,7 @@ async def _repl() -> None:
             known_topics=config.known_topics,
             max_memories=config.max_memories_per_prompt,
             max_memory_tokens=config.max_memory_tokens,
+            procedure_manager=procedure_manager,
         )
         response = await agent.invoke(
             user_prompt, system_prompt,
@@ -180,6 +201,15 @@ async def _repl() -> None:
 
         if response.session_id:
             session_id = response.session_id
+
+        # Record exchange for potential procedure reflection
+        if procedure_manager and response.tools_used:
+            procedure_manager.record_exchange(
+                user_request=text,
+                tools_used=response.tools_used,
+                narration=response.narration,
+                final_response=response.text,
+            )
 
         _print(response.text)
 

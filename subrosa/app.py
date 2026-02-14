@@ -14,6 +14,7 @@ from .agent import Agent
 from .config import load_config
 from .health import Health, init_langfuse, shutdown_langfuse
 from .memory import MemoryExtractor
+from .procedures import ProcedureManager
 from .scheduler import Scheduler
 from .store import Store
 from .telegram import TelegramBot, send_message
@@ -77,6 +78,15 @@ async def _async_main() -> None:
         known_topics=config.known_topics,
     ) if config.memory_enabled and config.implicit_extraction else None
 
+    procedure_manager = ProcedureManager(
+        store=store,
+        reflection_model=config.reflection_model,
+        min_tool_calls=config.min_tool_calls,
+        similarity_threshold=config.procedure_similarity_threshold,
+        update_threshold=config.procedure_update_threshold,
+        max_per_prompt=config.max_procedures_per_prompt,
+    ) if config.procedures_enabled else None
+
     # Create Telegram bot
     bot = TelegramBot(
         config=config,
@@ -84,6 +94,7 @@ async def _async_main() -> None:
         store=store,
         health=health,
         memory_extractor=memory_extractor,
+        procedure_manager=procedure_manager,
     )
     app = bot.build_app()
 

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from .config import Config
     from .health import Health
     from .memory import MemoryExtractor
+    from .procedures import ProcedureManager
     from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -194,12 +195,14 @@ class TelegramBot:
         store: Store,
         health: Health,
         memory_extractor: MemoryExtractor | None = None,
+        procedure_manager: ProcedureManager | None = None,
     ):
         self._config = config
         self._agent = agent
         self._store = store
         self._health = health
         self._memory_extractor = memory_extractor
+        self._procedure_manager = procedure_manager
         self._app: Application | None = None
 
         self._pending: dict[int, tuple[list[str], asyncio.Task]] = {}
@@ -359,6 +362,17 @@ class TelegramBot:
                 self._current_task = None
                 return
 
+            # Check for explicit procedure save request
+            if self._procedure_manager:
+                from .procedures import detect_procedure_request
+                if detect_procedure_request(text):
+                    if self._procedure_manager.schedule_reflection():
+                        await indicator.finalize("Reflecting on our last interaction and saving a procedure...")
+                    else:
+                        await indicator.finalize("Nothing recent to save — try after a complex task.")
+                    self._current_task = None
+                    return
+
             # Get conversation for session resumption
             conv = await self._store.get_or_create_conversation(chat_id)
             resume_session = conv.get("agent_session_id") or None
@@ -369,6 +383,7 @@ class TelegramBot:
                 max_memories=self._config.max_memories_per_prompt,
                 max_memory_tokens=self._config.max_memory_tokens,
                 media_files=media_files,
+                procedure_manager=self._procedure_manager,
             )
 
             # Invoke agent with timeout
@@ -415,6 +430,15 @@ class TelegramBot:
             # Schedule background memory extraction
             if self._memory_extractor and self._config.implicit_extraction:
                 self._memory_extractor.schedule_extraction(text, response.text)
+
+            # Record exchange for potential procedure reflection
+            if self._procedure_manager and response.tools_used:
+                self._procedure_manager.record_exchange(
+                    user_request=text,
+                    tools_used=response.tools_used,
+                    narration=response.narration,
+                    final_response=response.text,
+                )
 
         except asyncio.TimeoutError:
             await indicator.delete()

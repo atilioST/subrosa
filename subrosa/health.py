@@ -118,19 +118,8 @@ def trace_invocation(
                 "output": usage.get("output_tokens", 0),
             }
 
-        trace = lf.trace(
+        generation = lf.start_generation(
             name=name,
-            input=input_prompt,
-            output=output_text,
-            metadata={
-                "session_id": session_id,
-                "tags": tags or [],
-                **(metadata or {}),
-            },
-        )
-
-        trace.generation(
-            name="claude-agent-sdk",
             model=model,
             input=input_prompt,
             output=output_text,
@@ -139,11 +128,13 @@ def trace_invocation(
                 "total_cost_usd": total_cost_usd,
                 "duration_ms": duration_ms,
                 "session_id": session_id,
+                "tags": tags or [],
                 **(metadata or {}),
             },
         )
+        generation.end()
 
-        return trace.id
+        return None
     except Exception:
         logger.warning("Failed to record Langfuse trace", exc_info=True)
         return None

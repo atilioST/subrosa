@@ -131,6 +131,14 @@ CREATE TABLE IF NOT EXISTS task_history (
     timestamp TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_history_task ON task_history(task_id);
+
+-- Procedure embeddings
+CREATE TABLE IF NOT EXISTS procedure_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path TEXT NOT NULL UNIQUE,
+    embedding BLOB NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 _FTS_SCHEMA = """
@@ -693,3 +701,21 @@ class Store:
         cursor = await self._db.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         await self._db.commit()
         return cursor.rowcount > 0
+
+    # ── Procedure Embeddings ───────────────────────────────────────────────
+
+    async def save_procedure_embedding(self, file_path: str, embedding: bytes) -> None:
+        await self._db.execute(
+            "INSERT OR REPLACE INTO procedure_embeddings (file_path, embedding, updated_at) VALUES (?, ?, datetime('now'))",
+            (file_path, embedding),
+        )
+        await self._db.commit()
+
+    async def get_procedure_embeddings(self) -> list[dict]:
+        cursor = await self._db.execute("SELECT * FROM procedure_embeddings")
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def delete_procedure_embedding(self, file_path: str) -> None:
+        await self._db.execute("DELETE FROM procedure_embeddings WHERE file_path = ?", (file_path,))
+        await self._db.commit()

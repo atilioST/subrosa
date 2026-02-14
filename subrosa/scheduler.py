@@ -185,11 +185,14 @@ class Scheduler:
             "config": c,
         }
 
+        # Day-of-week filter (mon-fri if weekdays_only)
+        dow = "mon-fri" if c.weekdays_only else None
+
         # Morning briefing
         h, m = map(int, c.morning_briefing.split(":"))
         self._scheduler.add_job(
             _briefing_job,
-            CronTrigger(hour=h, minute=m, timezone=tz),
+            CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
             kwargs={**common, "kind": "morning"},
             id="morning_briefing", replace_existing=True,
         )
@@ -198,7 +201,7 @@ class Scheduler:
         h, m = map(int, c.noon_briefing.split(":"))
         self._scheduler.add_job(
             _briefing_job,
-            CronTrigger(hour=h, minute=m, timezone=tz),
+            CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
             kwargs={**common, "kind": "noon"},
             id="noon_briefing", replace_existing=True,
         )
@@ -207,7 +210,7 @@ class Scheduler:
         h, m = map(int, c.evening_digest.split(":"))
         self._scheduler.add_job(
             _briefing_job,
-            CronTrigger(hour=h, minute=m, timezone=tz),
+            CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
             kwargs={**common, "kind": "evening"},
             id="evening_digest", replace_existing=True,
         )
@@ -244,10 +247,10 @@ class Scheduler:
                 logger.info("Scheduled skill: %s (%s) — %s", skill_name, label, cron_expr)
 
         logger.info(
-            "Schedule: morning=%s, noon=%s, evening=%s, monitoring=%s (%s-%s %s)",
+            "Schedule: morning=%s, noon=%s, evening=%s, monitoring=%s (%s-%s %s) weekdays_only=%s",
             c.morning_briefing, c.noon_briefing, c.evening_digest,
             f"every {interval}m" if interval > 0 else "disabled",
-            c.work_hours_start, c.work_hours_end, tz,
+            c.work_hours_start, c.work_hours_end, tz, c.weekdays_only,
         )
 
     def start(self) -> None:
