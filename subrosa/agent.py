@@ -102,7 +102,9 @@ class Agent:
                         text_parts.append(block.text)
                     elif isinstance(block, ToolUseBlock):
                         tools_used.append(block.name)
-                        logger.info("  tool: %s", block.name)
+                        # Log tool name + input for debugging
+                        input_preview = str(block.input)[:200]
+                        logger.info("  tool: %s → %s", block.name, input_preview)
             elif isinstance(message, ResultMessage):
                 result = message
 

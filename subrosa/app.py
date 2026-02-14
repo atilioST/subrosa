@@ -63,6 +63,11 @@ async def _async_main() -> None:
     store = Store()
     await store.initialize()
 
+    # Clear stale session IDs — old CLI subprocesses are dead after restart
+    cleared = await store.clear_all_sessions()
+    if cleared:
+        logger.info("Cleared %d stale agent session(s)", cleared)
+
     # Create core objects
     health = Health()
     agent = Agent(model=config.model, max_turns=config.max_turns)

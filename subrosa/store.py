@@ -276,6 +276,14 @@ class Store:
             "topic": "",
         }
 
+    async def clear_all_sessions(self) -> int:
+        """Clear all agent session IDs. Called on startup since old CLI subprocesses are dead."""
+        cursor = await self._db.execute(
+            "UPDATE conversations SET agent_session_id = '' WHERE agent_session_id != ''"
+        )
+        await self._db.commit()
+        return cursor.rowcount
+
     async def update_conversation(
         self, conversation_id: int, agent_session_id: str | None = None, topic: str | None = None
     ) -> None:
