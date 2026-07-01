@@ -14,7 +14,38 @@ from .store import Store
 if TYPE_CHECKING:
     from .procedures import ProcedureManager
 
+# Primitives that should always surface (high signal-to-noise)
+_HIGH_SIGNAL_PRIMITIVES = {"risk", "decision", "commitment", "event"}
+
 logger = logging.getLogger(__name__)
+
+
+def clock_emoji(time_str: str) -> str:
+    """Return the closest clock-face emoji for an HH:MM time string.
+
+    Maps to Unicode clock faces (🕐–🕧). Rounds to nearest half-hour.
+    Falls back to 🕓 if parsing fails.
+    """
+    try:
+        h, m = map(int, time_str.split(":"))
+    except (ValueError, AttributeError):
+        return "🕓"
+
+    # Round to nearest half-hour
+    half = 1 if m >= 15 and m < 45 else (0 if m < 15 else 0)
+    if m >= 45:
+        h += 1
+    h = h % 12  # 0-11
+
+    # Unicode clock faces: 🕐 is U+1F550 (1 o'clock), 🕜 is U+1F55C (1:30)
+    # On-the-hour: U+1F550 + (h - 1) % 12
+    # Half-past:   U+1F55C + (h - 1) % 12
+    if half:
+        base = 0x1F55C + (h - 1) % 12
+    else:
+        base = 0x1F550 + (h - 1) % 12
+    return chr(base)
+
 
 # Known entities for subject matching
 _KNOWN_PEOPLE = {"brock", "himanshu", "jared", "bailee", "walter", "atilio"}
@@ -273,6 +304,84 @@ def format_memories_for_prompt(scored_memories: list[dict]) -> str:
     return "\n".join(sections)
 
 
+# ── Knowledge retrieval (Open Brain) ────────────────────────────────────────
+
+async def retrieve_relevant_knowledge(
+    store: Store,
+    query: str,
+    limit: int = 8,
+    threshold: float = 0.3,
+    days: int | None = None,
+) -> list[dict]:
+    """Semantic search over the knowledge table for items relevant to query."""
+    try:
+        return await store.search_knowledge_semantic(
+            query=query,
+            limit=limit,
+            threshold=threshold,
+            days=days,
+        )
+    except Exception:
+        logger.debug("Knowledge retrieval failed", exc_info=True)
+        return []
+
+
+async def retrieve_recent_knowledge(
+    store: Store,
+    hours: int = 24,
+    limit: int = 20,
+    primitives: set[str] | None = None,
+) -> list[dict]:
+    """Fetch recently updated knowledge items, optionally filtered by primitive type."""
+    try:
+        cursor = await store._db.execute(
+            """SELECT k.*, ke.embedding IS NOT NULL AS has_embedding
+               FROM knowledge k
+               LEFT JOIN knowledge_embeddings ke ON ke.knowledge_id = k.id
+               WHERE k.active = 1
+                 AND k.updated_at >= datetime('now', ?)
+               ORDER BY k.updated_at DESC
+               LIMIT ?""",
+            (f"-{hours} hours", limit),
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+        if primitives:
+            rows = [r for r in rows if r.get("primitive") in primitives]
+        return rows
+    except Exception:
+        logger.debug("Recent knowledge retrieval failed", exc_info=True)
+        return []
+
+
+def format_knowledge_for_prompt(items: list[dict], heading: str = "## Brain Context\n") -> str:
+    """Format knowledge items as a prompt section, grouped by domain."""
+    if not items:
+        return ""
+
+    by_domain: dict[str, list[dict]] = {}
+    for item in items:
+        by_domain.setdefault(item.get("domain", "General"), []).append(item)
+
+    parts = [heading]
+    for domain, domain_items in by_domain.items():
+        parts.append(f"### {domain}")
+        for item in domain_items:
+            primitive = item.get("primitive", "")
+            entity = item.get("entity_name", "")
+            summary = item.get("summary", "")
+            updated = item.get("updated_at", "")[:10]
+            label = f"[{primitive}]" if primitive else ""
+            entity_part = f"**{entity}**" if entity and entity != "unknown" else ""
+            line_parts = [label, entity_part, summary]
+            line = " ".join(p for p in line_parts if p)
+            if updated:
+                line += f" _{updated}_"
+            parts.append(f"- {line}")
+        parts.append("")
+
+    return "\n".join(parts)
+
+
 # ── Procedure formatting ──────────────────────────────────────────────────
 
 def format_procedures_for_prompt(procedures: list[dict]) -> str:
@@ -334,6 +443,12 @@ async def build_user_prompt(
     """Assemble user prompt with memory context, procedures, task context, and media."""
     parts = []
 
+    # Structured knowledge (Open Brain) — semantic search, recent window
+    knowledge = await retrieve_relevant_knowledge(store, user_message, limit=6, days=30)
+    knowledge_section = format_knowledge_for_prompt(knowledge)
+    if knowledge_section:
+        parts.append(knowledge_section)
+
     # Memory
     try:
         scored = await retrieve_relevant_memories(
@@ -380,6 +495,20 @@ async def build_briefing_prompt(kind: str = "morning", store: Store | None = Non
     """Build prompt for scheduled briefings."""
     parts = []
 
+    # Inject recent knowledge as pre-distilled context (reduces MCP tool calls)
+    if store:
+        hours = {"morning": 18, "noon": 6, "evening": 12}.get(kind, 12)
+        recent = await retrieve_recent_knowledge(
+            store, hours=hours, limit=25,
+            primitives=_HIGH_SIGNAL_PRIMITIVES,
+        )
+        knowledge_section = format_knowledge_for_prompt(
+            recent, heading=f"## Pre-distilled Activity (last {hours}h)\n"
+        )
+        if knowledge_section:
+            parts.append(knowledge_section)
+            parts.append("---\n")
+
     # Task section for morning briefing
     if kind == "morning" and store:
         try:
@@ -390,11 +519,11 @@ async def build_briefing_prompt(kind: str = "morning", store: Store | None = Non
                 if tasks_due:
                     lines.append("## Tasks Due Soon")
                     for t in tasks_due:
-                        lines.append(f"- #{t['id']}: {t['title']} (due {t.get('due_date', 'N/A')[:10]})")
+                        lines.append(f"- 🕓 #{t['id']}: {t['title']} (due {t.get('due_date', 'N/A')[:10]})")
                 if recurring:
                     lines.append("## Recurring Items")
                     for t in recurring:
-                        lines.append(f"- #{t['id']}: {t['title']}")
+                        lines.append(f"- 🕓 #{t['id']}: {t['title']}")
                 parts.append("\n".join(lines))
                 parts.append("\n---\n")
         except Exception:
@@ -431,27 +560,61 @@ async def build_briefing_prompt(kind: str = "morning", store: Store | None = Non
     return "".join(parts)
 
 
-def build_monitoring_prompt(
+async def build_monitoring_prompt(
     slack_channels: list[str],
     jira_projects: list[str],
     github_repos: list[str],
+    store: Store | None = None,
+    monitoring_interval_minutes: int = 30,
 ) -> str:
     """Build prompt for monitoring cycle."""
+    # Prepend recently distilled items so the agent skips what it already reported
+    recently_reported: str = ""
+    if store:
+        recent = await retrieve_recent_knowledge(
+            store,
+            hours=max(1, monitoring_interval_minutes // 60 + 1),
+            limit=10,
+            primitives=_HIGH_SIGNAL_PRIMITIVES,
+        )
+        if recent:
+            recently_reported = format_knowledge_for_prompt(
+                recent, heading="## Already known (skip re-reporting these)\n"
+            )
+
     parts = [
-        "Perform a monitoring check. Look for important, actionable items only.",
-        "Skip routine activity — only surface things that need attention.",
+        "Perform a monitoring check. Surface only important, actionable items.",
+        "",
+        "## CRITICAL — HIGHEST PRIORITY (search these first)",
+        "",
+        "1. **@atilio mentions workspace-wide** — use slack_search_messages with"
+        " query `@atilio`. ANY mention of Atilio anywhere is important.",
+        "2. **Class 1/2 incident channels** — search `in:class1` and `in:class2`."
+        " These are dynamically created incident channels. ANY activity matters.",
+        "3. **Key people** — search messages from: brock, wthorn (Walter),"
+        " john.leigh, jon.scharff.",
+        "",
+        "## RELEASE STATUS",
+        "",
+        "4. Search messages from Luke Chavez (lchavez) and Akanksha Shrivastava"
+        " for release status posts.",
         "",
     ]
 
     if slack_channels:
         channels = ", ".join(f"#{c}" for c in slack_channels)
-        parts.append(f"**Slack**: Check channels {channels} for important messages, "
-                     "escalations, or decisions in the last 30 minutes.")
+        parts.extend([
+            "## STANDARD CHANNEL SCAN",
+            "",
+            f"5. Check channels {channels} for important messages,"
+            " escalations, or decisions in the last 45 minutes.",
+            "",
+        ])
 
     if jira_projects:
         projects = ", ".join(jira_projects)
-        parts.append(f"**Jira**: Check projects {projects} for blocked tickets, "
-                     "status changes on critical items, or sprint health issues.")
+        parts.append(f"**Jira**: Check projects {projects} for new Class 1/2"
+                     " issues or blocked critical items.")
 
     if github_repos:
         repos = ", ".join(github_repos)
@@ -460,12 +623,30 @@ def build_monitoring_prompt(
 
     parts.extend([
         "",
-        "For each important finding, provide:",
-        "- Source (Slack/Jira/GitHub)",
-        "- Brief summary (one sentence)",
-        "- Why it matters / recommended action",
+        "## SIGNAL FILTER — only surface if:",
+        "",
+        "- **P0**: Any @atilio mention in a class1 or class2 channel",
+        "- Direct question or request aimed at Atilio",
+        "- Decision announced that affects Scout org",
+        "- Incident, outage, or customer escalation",
+        "- Blocker called out by a team lead",
+        "- Brock directive that requires action or response",
+        "- New Class 1 or Class 2 issue mentioned",
+        "- Release status updates from Luke or Akanksha",
+        "",
+        "## OUTPUT RULES",
+        "",
+        "- Class 1/2 mentions of Atilio get a ‼️ prefix",
+        "- Lead with the most urgent item",
+        "- Keep it under 500 characters",
+        "- Include channel names and people",
+        "- NEVER mention sprints — Scout uses Kanban",
+        "- No filler, no pleasantries — be direct",
         "",
         "If nothing important is happening, respond with exactly: NO_INSIGHTS",
     ])
 
-    return "\n".join(parts)
+    result = "\n".join(parts)
+    if recently_reported:
+        result = recently_reported + "\n" + result
+    return result

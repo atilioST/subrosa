@@ -39,6 +39,7 @@ class Config:
     # Agent
     model: str = "sonnet"
     max_turns: int = 10
+    briefing_max_turns: int = 25
     agent_timeout: int = 300
     briefing_timeout: int = 300
     monitoring_timeout: int = 180
@@ -87,6 +88,12 @@ class Config:
     # Briefing
     briefing_path: str = "~/.subrosa/briefing.md"
 
+    # Brain server
+    brain_enabled: bool = False
+    brain_host: str = "127.0.0.1"
+    brain_port: int = 7771
+    brain_token: str = ""
+
     # Logging
     log_level: str = "INFO"
 
@@ -112,6 +119,7 @@ def load_config(path: Path | None = None) -> Config:
     mem = raw.get("memory", {})
     proc = raw.get("procedures", {})
     ctx = raw.get("context", {})
+    brain = raw.get("brain", {})
     log = raw.get("logging", {})
 
     allowed = tg.get("allowed_chat_ids", [])
@@ -121,6 +129,7 @@ def load_config(path: Path | None = None) -> Config:
         chat_id=allowed[0] if allowed else 0,
         model=ag.get("model", "sonnet"),
         max_turns=ag.get("max_turns", 10),
+        briefing_max_turns=ag.get("briefing_max_turns", 25),
         agent_timeout=ag.get("agent_timeout", 300),
         briefing_timeout=ag.get("briefing_timeout", 300),
         monitoring_timeout=ag.get("monitoring_timeout", 180),
@@ -154,5 +163,9 @@ def load_config(path: Path | None = None) -> Config:
         langfuse_secret_key=lf.get("secret_key", ""),
         langfuse_host=lf.get("host", "https://cloud.langfuse.com"),
         briefing_path=br.get("path", "~/.subrosa/briefing.md"),
+        brain_enabled=brain.get("enabled", False),
+        brain_host=brain.get("host", "127.0.0.1"),
+        brain_port=brain.get("port", 7771),
+        brain_token=brain.get("token", ""),
         log_level=log.get("level", "INFO"),
     )

@@ -7,7 +7,7 @@ It monitors Slack, Jira, and GitHub via MCP servers, generates daily briefings, 
 
 ## Architecture
 
-11 modules, ~1860 lines total. Flat structure, no god objects.
+13 modules, ~2200 lines total. Flat structure, no god objects.
 
 - `app.py` — Entry point, lifecycle, wiring
 - `config.py` — Single Config dataclass from config.toml
@@ -20,6 +20,8 @@ It monitors Slack, Jira, and GitHub via MCP servers, generates daily briefings, 
 - `scheduler.py` — APScheduler briefing/monitoring jobs
 - `health.py` — Health tracking + Langfuse tracing
 - `prompt.py` — System prompt constant
+- `distiller.py` — Haiku distillation: events → structured knowledge items
+- `brain_server.py` — Open Brain MCP server (FastMCP over HTTP SSE, port 7771)
 
 ## Running
 

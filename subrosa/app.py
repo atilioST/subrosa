@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from .agent import Agent
 from .config import load_config
+from .distiller import Distiller
 from .health import Health, init_langfuse, shutdown_langfuse
 from .memory import MemoryExtractor
 from .procedures import ProcedureManager
@@ -98,6 +99,16 @@ async def _async_main() -> None:
     )
     app = bot.build_app()
 
+    # Create distiller (always; only fires when monitoring_interval > 0)
+    distiller = Distiller(store=store, model=config.extraction_model)
+
+    # Start brain MCP server if enabled
+    brain_task = None
+    if config.brain_enabled:
+        from .brain_server import start as start_brain
+        brain_task = start_brain(store=store, config=config)
+        logger.info("Brain server enabled on %s:%d", config.brain_host, config.brain_port)
+
     # Create scheduler
     scheduler = Scheduler(
         config=config,
@@ -105,6 +116,7 @@ async def _async_main() -> None:
         bot=bot,
         store=store,
         health=health,
+        distiller=distiller,
     )
 
     # Initialize Telegram (retry on network errors)
@@ -134,7 +146,7 @@ async def _async_main() -> None:
     if config.chat_id:
         try:
             await asyncio.sleep(1)
-            await send_message(app.bot, config.chat_id, "Subrosa online")
+            await send_message(app.bot, config.chat_id, "⛩️ Subrosa online")
         except Exception:
             logger.warning("Failed to send startup notification", exc_info=True)
 
@@ -158,6 +170,9 @@ async def _async_main() -> None:
     await store.log_diagnostic("app", "shutdown started")
 
     scheduler.shutdown(wait=False)
+
+    if brain_task and not brain_task.done():
+        brain_task.cancel()
 
     if app.updater.running:
         await app.updater.stop()

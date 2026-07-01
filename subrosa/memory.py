@@ -174,6 +174,8 @@ async def extract_memories_from_conversation(
 
         result_text = ""
         async for message in query(prompt=prompt, options=options):
+            if message is None:
+                continue
             if isinstance(message, ResultMessage):
                 result_text = message.result or ""
 

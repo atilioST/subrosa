@@ -17,6 +17,7 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "PyYAML>=6.0",
     "tomli>=2.0; python_version < '3.11'",
+    "mcp>=1.9",
 ]
 
 [project.scripts]

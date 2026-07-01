@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 if TYPE_CHECKING:
     from .agent import Agent
     from .config import Config
+    from .distiller import Distiller
     from .health import Health
     from .store import Store
     from .telegram import TelegramBot
@@ -38,7 +39,11 @@ async def _briefing_job(
         prompt = await build_briefing_prompt(kind, store)
 
         response = await asyncio.wait_for(
-            agent.invoke(prompt, system_prompt, trace_name=f"briefing-{kind}"),
+            agent.invoke(
+                prompt, system_prompt,
+                trace_name=f"briefing-{kind}",
+                max_turns=config.briefing_max_turns,
+            ),
             timeout=config.briefing_timeout,
         )
         health.record_agent()
@@ -119,8 +124,9 @@ async def _monitoring_job(
     store: Store,
     health: Health,
     config: Config,
+    distiller: Distiller | None = None,
 ) -> None:
-    """Run a monitoring cycle."""
+    """Run a monitoring cycle, then schedule distillation of new events."""
     if bot.is_silenced:
         logger.info("Monitoring skipped — silenced")
         return
@@ -128,8 +134,10 @@ async def _monitoring_job(
     try:
         from .context import build_system_prompt, build_monitoring_prompt
         system_prompt = build_system_prompt(config.briefing_path)
-        prompt = build_monitoring_prompt(
-            config.slack_channels, config.jira_projects, config.github_repos
+        prompt = await build_monitoring_prompt(
+            config.slack_channels, config.jira_projects, config.github_repos,
+            store=store,
+            monitoring_interval_minutes=config.monitoring_interval_minutes,
         )
 
         response = await asyncio.wait_for(
@@ -154,6 +162,10 @@ async def _monitoring_job(
         logger.exception("Monitoring failed")
         await store.log_diagnostic("scheduler", "monitoring error", level="error")
 
+    # Fire-and-forget distillation after each monitoring poll
+    if distiller is not None:
+        distiller.schedule()
+
 
 class Scheduler:
     """APScheduler wrapper for all scheduled jobs."""
@@ -165,12 +177,14 @@ class Scheduler:
         bot: TelegramBot,
         store: Store,
         health: Health,
+        distiller: Distiller | None = None,
     ):
         self._config = config
         self._agent = agent
         self._bot = bot
         self._store = store
         self._health = health
+        self._distiller = distiller
         self._scheduler = AsyncIOScheduler(timezone=config.timezone)
         self._apply_schedule()
 
@@ -227,7 +241,7 @@ class Scheduler:
                     hour=f"{work_start_h}-{work_end_h}",
                     timezone=tz,
                 ),
-                kwargs=common,
+                kwargs={**common, "distiller": self._distiller},
                 id="monitoring_poll", replace_existing=True,
             )
 

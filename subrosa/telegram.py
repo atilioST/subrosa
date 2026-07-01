@@ -457,7 +457,7 @@ class TelegramBot:
     # ── Commands ────────────────────────────────────────────────────────
 
     async def _cmd_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        await send_message(self._app.bot, update.effective_chat.id, "Subrosa online. How can I help?")
+        await send_message(self._app.bot, update.effective_chat.id, "⛩️ Subrosa online. How can I help?")
 
     async def _cmd_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = update.effective_chat.id
@@ -512,7 +512,11 @@ class TelegramBot:
             system_prompt = build_system_prompt(self._config.briefing_path)
             prompt = await build_briefing_prompt(kind, self._store)
             response = await asyncio.wait_for(
-                self._agent.invoke(prompt, system_prompt, trace_name=f"briefing-{kind}"),
+                self._agent.invoke(
+                    prompt, system_prompt,
+                    trace_name=f"briefing-{kind}",
+                    max_turns=self._config.briefing_max_turns,
+                ),
                 timeout=self._config.briefing_timeout,
             )
             self._health.record_agent()
@@ -604,14 +608,18 @@ class TelegramBot:
         loop.call_later(0.5, lambda: os.kill(pid, signal.SIGTERM))
 
     async def _cmd_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        from .context import clock_emoji
+        c = self._config
+        mon_interval = c.monitoring_interval_minutes
+        mon_display = f"every {mon_interval}m" if mon_interval > 0 else "disabled"
         lines = [
             "<b>Schedule</b>",
-            f"Morning: {self._config.morning_briefing}",
-            f"Noon: {self._config.noon_briefing}",
-            f"Evening: {self._config.evening_digest}",
-            f"Monitoring: every {self._config.monitoring_interval_minutes}m",
-            f"Work hours: {self._config.work_hours_start}–{self._config.work_hours_end}",
-            f"Timezone: {self._config.timezone}",
+            f"{clock_emoji(c.morning_briefing)} Morning: {c.morning_briefing}",
+            f"{clock_emoji(c.noon_briefing)} Noon: {c.noon_briefing}",
+            f"{clock_emoji(c.evening_digest)} Evening: {c.evening_digest}",
+            f"Monitoring: {mon_display}",
+            f"Work hours: {c.work_hours_start}–{c.work_hours_end}",
+            f"Timezone: {c.timezone}",
         ]
         await send_message(self._app.bot, update.effective_chat.id, "\n".join(lines))
 

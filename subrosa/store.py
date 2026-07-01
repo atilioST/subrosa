@@ -139,6 +139,57 @@ CREATE TABLE IF NOT EXISTS procedure_embeddings (
     embedding BLOB NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ── Open Brain ───────────────────────────────────────────────────────────────
+
+-- Extensible ontology: domains and primitives are rows, not hardcoded logic.
+CREATE TABLE IF NOT EXISTS ontology_domains (
+    name        TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS ontology_primitives (
+    name                 TEXT PRIMARY KEY,
+    description          TEXT NOT NULL DEFAULT '',
+    retrieval_behavior   TEXT NOT NULL DEFAULT '',
+    created_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Structured knowledge items distilled from events.
+CREATE TABLE IF NOT EXISTS knowledge (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain        TEXT NOT NULL,
+    primitive     TEXT NOT NULL,
+    entity_type   TEXT NOT NULL,
+    entity_name   TEXT NOT NULL,
+    summary       TEXT NOT NULL,
+    source        TEXT NOT NULL DEFAULT 'manual',
+    source_ref    TEXT,
+    confidence    REAL NOT NULL DEFAULT 0.8,
+    created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at    TEXT,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_domain    ON knowledge(domain);
+CREATE INDEX IF NOT EXISTS idx_knowledge_primitive ON knowledge(primitive);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entity    ON knowledge(entity_type, entity_name);
+CREATE INDEX IF NOT EXISTS idx_knowledge_source    ON knowledge(source, created_at);
+CREATE INDEX IF NOT EXISTS idx_knowledge_active    ON knowledge(active, updated_at);
+
+CREATE TABLE IF NOT EXISTS knowledge_embeddings (
+    knowledge_id INTEGER PRIMARY KEY REFERENCES knowledge(id) ON DELETE CASCADE,
+    embedding    BLOB NOT NULL,
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Generic key-value store for pipeline state (e.g. last_distilled_at).
+CREATE TABLE IF NOT EXISTS _meta (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 _FTS_SCHEMA = """
@@ -189,13 +240,17 @@ class EmbeddingService:
 class Store:
     """Unified async SQLite store for all Subrosa state."""
 
-    def __init__(self, db_path: Path | None = None):
-        self._path = db_path or _DB_PATH
+    def __init__(self, db_path: Path | str | None = None):
+        if db_path == ":memory:":
+            self._path: Path | str = ":memory:"
+        else:
+            self._path = Path(db_path) if db_path else _DB_PATH
         self._db: aiosqlite.Connection | None = None
         self._embeddings = EmbeddingService()
 
     async def initialize(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
+        if self._path != ":memory:":
+            Path(self._path).parent.mkdir(parents=True, exist_ok=True)
         self._db = await aiosqlite.connect(str(self._path))
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
@@ -204,6 +259,7 @@ class Store:
         await self._migrate_fts()
         await self._db.executescript(_FTS_SCHEMA)
         await self._db.commit()
+        await self._seed_ontology()
         logger.info("Store initialized: %s", self._path)
 
     async def close(self) -> None:
@@ -719,3 +775,265 @@ class Store:
     async def delete_procedure_embedding(self, file_path: str) -> None:
         await self._db.execute("DELETE FROM procedure_embeddings WHERE file_path = ?", (file_path,))
         await self._db.commit()
+
+    # ── Meta (key-value pipeline state) ────────────────────────────────────
+
+    async def get_meta(self, key: str) -> str | None:
+        cursor = await self._db.execute("SELECT value FROM _meta WHERE key = ?", (key,))
+        row = await cursor.fetchone()
+        return row["value"] if row else None
+
+    async def set_meta(self, key: str, value: str) -> None:
+        await self._db.execute(
+            "INSERT OR REPLACE INTO _meta (key, value, updated_at) VALUES (?, ?, datetime('now'))",
+            (key, value),
+        )
+        await self._db.commit()
+
+    # ── Ontology ────────────────────────────────────────────────────────────
+
+    _DOMAINS: list[tuple[str, str]] = [
+        ("Org Leadership", "Org structure, headcount, hiring, onboarding, manager coaching, promotions, compensation, retention, succession"),
+        ("Talent & Performance", "Performance standards, coaching, feedback, PIPs, exits, reviews, calibration, recognition, growth"),
+        ("Delivery & Execution", "Roadmap planning, cross-team prioritization, dependencies, sprint/release health, escalations, capacity"),
+        ("Product Outcome Ownership", "Scout answer quality, engineering accountability for user trust, production behavior, quality bar"),
+        ("Technical & Quality Leadership", "Architecture oversight, tech debt, engineering standards, development process, release discipline, high-risk changes"),
+        ("Operational Excellence", "DORA metrics, incident process, post-mortems, bug triage, engineering cadences, tooling"),
+        ("Cross-Functional Leadership", "Coordination with Product, Design, Support, Services, IT, Security; scope and tradeoff negotiation"),
+        ("Executive & Ad Hoc Support", "Unplanned leadership requests, audits, compliance, board/exec communication, ambiguous asks"),
+        ("Business & Customer Stewardship", "Executive escalations, customer-impact risk, field pain, AWS/infra cost, vendor management, budget"),
+        ("Reporting & Communication", "Upward reporting, status/risk/decision communication, engineering updates to stakeholders"),
+        ("Strategic", "Capacity allocation, long-range org planning, strategic signals from delivery friction, where to invest/defer/say no"),
+    ]
+
+    _PRIMITIVES: list[tuple[str, str, str]] = [
+        ("reference", "Stable fact about an entity", "Return when queried about that entity"),
+        ("state", "Current condition of something", "Return for current-status queries; refresh when updated"),
+        ("event", "Something that happened at a point in time", "Return for temporal queries; rank by recency"),
+        ("decision", "A committed choice", "Surface when making related decisions"),
+        ("commitment", "Something promised with implied accountability", "Surface when querying delivery status or risk"),
+        ("risk", "A known threat to an outcome", "Surface proactively alongside related queries"),
+        ("task", "Actionable follow-up item", "Surface in briefings and relevant domain queries"),
+        ("principle", "An enduring rule or standard", "Inject into context for related decisions"),
+    ]
+
+    async def _seed_ontology(self) -> None:
+        """Seed domains and primitives if tables are empty."""
+        cursor = await self._db.execute("SELECT COUNT(*) as cnt FROM ontology_domains")
+        row = await cursor.fetchone()
+        if row["cnt"] > 0:
+            return
+
+        for name, description in self._DOMAINS:
+            await self._db.execute(
+                "INSERT OR IGNORE INTO ontology_domains (name, description) VALUES (?, ?)",
+                (name, description),
+            )
+        for name, description, behavior in self._PRIMITIVES:
+            await self._db.execute(
+                "INSERT OR IGNORE INTO ontology_primitives (name, description, retrieval_behavior) VALUES (?, ?, ?)",
+                (name, description, behavior),
+            )
+        await self._db.commit()
+        logger.info("Seeded ontology: %d domains, %d primitives", len(self._DOMAINS), len(self._PRIMITIVES))
+
+    async def upsert_ontology_domain(self, name: str, description: str) -> None:
+        await self._db.execute(
+            "INSERT OR REPLACE INTO ontology_domains (name, description) VALUES (?, ?)",
+            (name, description),
+        )
+        await self._db.commit()
+
+    async def upsert_ontology_primitive(self, name: str, description: str, retrieval_behavior: str) -> None:
+        await self._db.execute(
+            "INSERT OR REPLACE INTO ontology_primitives (name, description, retrieval_behavior) VALUES (?, ?, ?)",
+            (name, description, retrieval_behavior),
+        )
+        await self._db.commit()
+
+    async def get_ontology_domains(self) -> list[dict]:
+        cursor = await self._db.execute("SELECT * FROM ontology_domains ORDER BY name")
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_ontology_primitives(self) -> list[dict]:
+        cursor = await self._db.execute("SELECT * FROM ontology_primitives ORDER BY name")
+        return [dict(r) for r in await cursor.fetchall()]
+
+    # ── Knowledge ───────────────────────────────────────────────────────────
+
+    def _knowledge_embed_text(self, item: dict) -> str:
+        """Canonical text for embedding a knowledge item."""
+        return f"{item['domain']} {item['primitive']} {item['entity_type']} {item['entity_name']} {item['summary']}"
+
+    async def _update_knowledge_embedding(self, knowledge_id: int, item: dict) -> None:
+        text = self._knowledge_embed_text(item)
+        blob = self._embeddings.embed(text)
+        await self._db.execute(
+            "INSERT OR REPLACE INTO knowledge_embeddings (knowledge_id, embedding, updated_at) VALUES (?, ?, datetime('now'))",
+            (knowledge_id, blob),
+        )
+
+    async def insert_knowledge(
+        self,
+        domain: str,
+        primitive: str,
+        entity_type: str,
+        entity_name: str,
+        summary: str,
+        source: str = "manual",
+        source_ref: str | None = None,
+        confidence: float = 0.8,
+        expires_at: str | None = None,
+    ) -> int:
+        """
+        Insert a knowledge item, deduplicating on (domain, primitive, entity_type, entity_name).
+        If an exact match exists, updates summary, confidence, and updated_at instead of inserting.
+        Returns the knowledge item ID.
+        """
+        cursor = await self._db.execute(
+            """SELECT id FROM knowledge
+               WHERE domain = ? AND primitive = ? AND entity_type = ? AND LOWER(entity_name) = LOWER(?) AND active = 1
+               LIMIT 1""",
+            (domain, primitive, entity_type, entity_name),
+        )
+        existing = await cursor.fetchone()
+
+        if existing:
+            kid = existing["id"]
+            await self._db.execute(
+                "UPDATE knowledge SET summary = ?, confidence = ?, source = ?, updated_at = datetime('now') WHERE id = ?",
+                (summary, confidence, source, kid),
+            )
+            item = {"domain": domain, "primitive": primitive, "entity_type": entity_type,
+                    "entity_name": entity_name, "summary": summary}
+            await self._update_knowledge_embedding(kid, item)
+            await self._db.commit()
+            return kid
+
+        cursor = await self._db.execute(
+            """INSERT INTO knowledge
+               (domain, primitive, entity_type, entity_name, summary, source, source_ref, confidence, expires_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (domain, primitive, entity_type, entity_name, summary, source, source_ref, confidence, expires_at),
+        )
+        kid = cursor.lastrowid
+        item = {"domain": domain, "primitive": primitive, "entity_type": entity_type,
+                "entity_name": entity_name, "summary": summary}
+        await self._update_knowledge_embedding(kid, item)
+        await self._db.commit()
+        return kid
+
+    async def search_knowledge_semantic(
+        self,
+        query: str,
+        domain: str | None = None,
+        primitive: str | None = None,
+        entity_type: str | None = None,
+        entity_name: str | None = None,
+        days: int | None = None,
+        limit: int = 10,
+        threshold: float = 0.25,
+    ) -> list[dict]:
+        """
+        Semantic search over knowledge_embeddings with optional filters.
+        Returns knowledge items ranked by cosine similarity, highest first.
+        """
+        query_blob = self._embeddings.embed(query)
+        query_vec = EmbeddingService.deserialize(query_blob)
+
+        conditions = ["k.active = 1"]
+        params: list[Any] = []
+        if domain:
+            conditions.append("k.domain = ?")
+            params.append(domain)
+        if primitive:
+            conditions.append("k.primitive = ?")
+            params.append(primitive)
+        if entity_type:
+            conditions.append("k.entity_type = ?")
+            params.append(entity_type)
+        if entity_name:
+            conditions.append("LOWER(k.entity_name) = LOWER(?)")
+            params.append(entity_name)
+        if days:
+            conditions.append("k.updated_at > datetime('now', ?)")
+            params.append(f"-{days} days")
+
+        where = " AND ".join(conditions)
+        cursor = await self._db.execute(
+            f"SELECT k.*, ke.embedding FROM knowledge k JOIN knowledge_embeddings ke ON ke.knowledge_id = k.id WHERE {where}",
+            params,
+        )
+        rows = await cursor.fetchall()
+
+        results = []
+        for row in rows:
+            vec = EmbeddingService.deserialize(row["embedding"])
+            sim = EmbeddingService.cosine_similarity(query_vec, vec)
+            if sim >= threshold:
+                d = dict(row)
+                d.pop("embedding", None)
+                d["score"] = sim
+                results.append(d)
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:limit]
+
+    async def query_entity(
+        self,
+        entity_name: str,
+        entity_type: str | None = None,
+        domain: str | None = None,
+        days: int | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """All knowledge about a specific entity, newest first."""
+        conditions = ["LOWER(entity_name) = LOWER(?)", "active = 1"]
+        params: list[Any] = [entity_name]
+        if entity_type:
+            conditions.append("entity_type = ?")
+            params.append(entity_type)
+        if domain:
+            conditions.append("domain = ?")
+            params.append(domain)
+        if days:
+            conditions.append("updated_at > datetime('now', ?)")
+            params.append(f"-{days} days")
+        params.append(limit)
+        where = " AND ".join(conditions)
+        cursor = await self._db.execute(
+            f"SELECT * FROM knowledge WHERE {where} ORDER BY updated_at DESC LIMIT ?", params
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_domain_brief(self, domain: str, days: int = 14) -> dict[str, list[dict]]:
+        """All knowledge for a domain over a time window, grouped by primitive."""
+        cursor = await self._db.execute(
+            """SELECT * FROM knowledge
+               WHERE domain = ? AND active = 1 AND updated_at > datetime('now', ?)
+               ORDER BY primitive, updated_at DESC""",
+            (domain, f"-{days} days"),
+        )
+        rows = [dict(r) for r in await cursor.fetchall()]
+        grouped: dict[str, list[dict]] = {}
+        for row in rows:
+            grouped.setdefault(row["primitive"], []).append(row)
+        return grouped
+
+    async def get_events_since(self, since: str | None = None, limit: int = 500) -> list[dict]:
+        """
+        Fetch events after a given ISO timestamp for distillation.
+        Returns events ordered oldest-first so the distiller processes them in order.
+        If since is None, returns events from the last 24 hours as a safe default.
+        """
+        if since:
+            cursor = await self._db.execute(
+                "SELECT * FROM events WHERE timestamp > ? ORDER BY timestamp ASC LIMIT ?",
+                (since, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT * FROM events WHERE timestamp > datetime('now', '-24 hours') ORDER BY timestamp ASC LIMIT ?",
+                (limit,),
+            )
+        return [dict(r) for r in await cursor.fetchall()]
