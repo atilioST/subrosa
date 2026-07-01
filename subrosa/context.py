@@ -650,3 +650,90 @@ async def build_monitoring_prompt(
     if recently_reported:
         result = recently_reported + "\n" + result
     return result
+
+
+async def build_person_digest_prompt(
+    watched_people: list[dict],
+    since_iso: str,
+    since_human: str,
+    since_date: str,
+    slack_channels: list[str] | None = None,
+) -> str:
+    """Build prompt for the hourly per-person Slack digest (delta-only).
+
+    Summarizes what each watched person has posted since ``since_iso``, in the
+    given priority order, omitting anyone with no new activity. Folds in a P0
+    safety net for @atilio mentions and Class 1/2 incidents. Emits the exact
+    sentinel ``NO_CHANGES`` when nothing new is found so the scheduler stays
+    silent.
+    """
+    # Slack's `after:` modifier is EXCLUSIVE of the date given (after:2026-07-01
+    # returns 2026-07-02 onward). To include the cutoff day itself, search from
+    # the day before, then filter precisely by real message timestamp below.
+    try:
+        after_date = (
+            datetime.strptime(since_date, "%Y-%m-%d") - timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+    except ValueError:
+        after_date = since_date
+
+    people_lines = []
+    for i, p in enumerate(watched_people, start=1):
+        name = p.get("name", p.get("handle", "?"))
+        handle = p.get("handle", "")
+        people_lines.append(f"{i}. **{name}** — search `from:@{handle} after:{after_date}`")
+
+    parts = [
+        "Hourly Slack scan. Report ONLY what is NEW since the last digest.",
+        "",
+        f"**Cutoff:** only include messages posted at or after {since_human}.",
+        f"Search with `after:{after_date}` (one day BEFORE the cutoff — Slack's"
+        f" `after:` is date-granular AND excludes the given day, so this is the"
+        f" correct way to capture cutoff-day messages). Then DISCARD any message"
+        f" whose actual timestamp is before {since_human}. Do NOT change the"
+        f" `after:` date to the cutoff date — that would drop today's messages.",
+        "",
+        "## WATCHED PEOPLE — report in this exact order",
+        "",
+        "For each person below, use slack_search_messages to find their posts"
+        " since the cutoff. Summarize what they posted ABOUT (topics, decisions,"
+        " asks, blockers) — not a message-by-message dump. Include channel names.",
+        "",
+        *people_lines,
+        "",
+        "## P0 SAFETY NET (always check, regardless of who posted)",
+        "",
+        "- **@atilio mentions** — `slack_search_messages` query `@atilio after:"
+        f"{after_date}`. Any new mention of Atilio anywhere is important.",
+        "- **Class 1/2 incidents** — search `in:class1` and `in:class2` for new"
+        " activity. These are dynamically created incident channels.",
+        "",
+        "## OUTPUT RULES",
+        "",
+        "- Order sections by the watched-people priority above.",
+        "- **OMIT any person with no new posts since the cutoff.** Do not write"
+        " 'no activity' lines — just leave them out.",
+        "- If there is any new @atilio mention or Class 1/2 incident activity, put"
+        " it FIRST under a `‼️ Needs attention` heading, before the per-person"
+        " sections.",
+        "- One short heading per person (their name) followed by 1–3 concise bullets.",
+        "- Keep it tight and mobile-friendly. No preamble, no pleasantries.",
+        "- NEVER mention sprints — Scout uses Kanban.",
+        "",
+        "## CRITICAL — DELTA SUPPRESSION",
+        "",
+        "If NO watched person posted anything new since the cutoff AND there are no"
+        " new @atilio mentions or Class 1/2 incidents, respond with exactly:"
+        " NO_CHANGES",
+        "(nothing else — no explanation).",
+    ]
+
+    if slack_channels:
+        channels = ", ".join(f"#{c}" for c in slack_channels)
+        parts.extend([
+            "",
+            f"## Channel scope hint: watched people are most active in {channels}."
+            " You may also find posts elsewhere — that's fine.",
+        ])
+
+    return "\n".join(parts)

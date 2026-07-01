@@ -45,6 +45,7 @@ class Config:
     monitoring_timeout: int = 180
 
     # Schedule
+    briefings_enabled: bool = False
     morning_briefing: str = "07:30"
     noon_briefing: str = "12:00"
     evening_digest: str = "18:00"
@@ -53,6 +54,14 @@ class Config:
     work_hours_end: str = "19:00"
     timezone: str = "America/Denver"
     weekdays_only: bool = False
+
+    # Per-person hourly Slack digest (delta-only)
+    person_digest_enabled: bool = True
+    person_digest_interval_minutes: int = 60
+    person_digest_start: str = "08:00"
+    person_digest_end: str = "18:00"
+    # Ordered watched people (priority order). Each: {"name": str, "handle": str}
+    watched_people: list[dict] = field(default_factory=list)
 
     # Monitoring scope
     slack_channels: list[str] = field(default_factory=list)
@@ -112,6 +121,7 @@ def load_config(path: Path | None = None) -> Config:
     tg = raw.get("telegram", {})
     sched = raw.get("schedule", {})
     work_hours = sched.get("work_hours", {})
+    person_digest = sched.get("person_digest", {})
     mon = raw.get("monitoring", {})
     ag = raw.get("agent", {})
     lf = raw.get("langfuse", {})
@@ -133,6 +143,7 @@ def load_config(path: Path | None = None) -> Config:
         agent_timeout=ag.get("agent_timeout", 300),
         briefing_timeout=ag.get("briefing_timeout", 300),
         monitoring_timeout=ag.get("monitoring_timeout", 180),
+        briefings_enabled=sched.get("briefings_enabled", False),
         morning_briefing=sched.get("morning_briefing", "07:30"),
         noon_briefing=sched.get("noon_briefing", "12:00"),
         evening_digest=sched.get("evening_digest", "18:00"),
@@ -141,6 +152,11 @@ def load_config(path: Path | None = None) -> Config:
         work_hours_end=work_hours.get("end", "19:00"),
         timezone=sched.get("timezone", "America/Denver"),
         weekdays_only=sched.get("weekdays_only", False),
+        person_digest_enabled=person_digest.get("enabled", True),
+        person_digest_interval_minutes=person_digest.get("interval_minutes", 60),
+        person_digest_start=person_digest.get("start", "08:00"),
+        person_digest_end=person_digest.get("end", "18:00"),
+        watched_people=raw.get("people", []),
         slack_channels=mon.get("slack_channels", []),
         jira_projects=mon.get("jira_projects", []),
         github_repos=mon.get("github_repos", []),

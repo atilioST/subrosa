@@ -529,6 +529,85 @@ class TelegramBot:
             await indicator.delete()
             await send_message(self._app.bot, chat_id, "Failed to generate briefing.")
 
+    async def _cmd_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Manually run the per-person Slack digest.
+
+        `/digest`     — delta since the last digest sent (advances the watermark).
+        `/digest 4`   — ad-hoc look-back over the last 4 hours (watermark untouched).
+        Always replies, even when there is nothing new.
+        """
+        from datetime import UTC, datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        chat_id = update.effective_chat.id
+        c = self._config
+        if not c.watched_people:
+            await send_message(self._app.bot, chat_id, "No watched people configured.")
+            return
+
+        from .scheduler import _DIGEST_WATERMARK_KEY
+
+        now = datetime.now(UTC)
+        hours_arg = None
+        if context.args:
+            try:
+                hours_arg = float(context.args[0])
+            except ValueError:
+                hours_arg = None
+
+        advance = hours_arg is None
+        if hours_arg is not None:
+            since_dt = now - timedelta(hours=hours_arg)
+        else:
+            since_dt = now - timedelta(minutes=c.person_digest_interval_minutes)
+            last = await self._store.get_meta(_DIGEST_WATERMARK_KEY)
+            if last:
+                try:
+                    since_dt = datetime.fromisoformat(last)
+                except ValueError:
+                    pass
+
+        tz = ZoneInfo(c.timezone)
+        since_local = since_dt.astimezone(tz)
+
+        indicator = WorkingIndicator(self._app.bot, chat_id)
+        try:
+            await indicator.start()
+            from .context import build_system_prompt, build_person_digest_prompt
+            system_prompt = build_system_prompt(c.briefing_path)
+            prompt = await build_person_digest_prompt(
+                c.watched_people,
+                since_iso=since_dt.isoformat(),
+                since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
+                since_date=since_local.strftime("%Y-%m-%d"),
+                slack_channels=c.slack_channels,
+            )
+            response = await asyncio.wait_for(
+                self._agent.invoke(
+                    prompt, system_prompt,
+                    trace_name="person-digest-manual",
+                    max_turns=c.briefing_max_turns,
+                ),
+                timeout=c.briefing_timeout,
+            )
+            self._health.record_agent()
+
+            text = response.text.strip()
+            if not response.is_error and (not text or text == "NO_CHANGES"):
+                await indicator.finalize(f"Nothing new since {since_local:%H:%M %Z}.")
+                return
+
+            await indicator.finalize(response.text)
+            if advance and not response.is_error:
+                await self._store.set_meta(_DIGEST_WATERMARK_KEY, now.isoformat())
+        except asyncio.TimeoutError:
+            await indicator.delete()
+            await send_message(self._app.bot, chat_id, "Digest timed out.")
+        except Exception:
+            logger.exception("Manual digest failed")
+            await indicator.delete()
+            await send_message(self._app.bot, chat_id, "Failed to generate digest.")
+
     async def _cmd_silence(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         duration = int(context.args[0]) if context.args else 60
         self._silence_until = time.monotonic() + duration * 60
@@ -608,18 +687,20 @@ class TelegramBot:
         loop.call_later(0.5, lambda: os.kill(pid, signal.SIGTERM))
 
     async def _cmd_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        from .context import clock_emoji
         c = self._config
-        mon_interval = c.monitoring_interval_minutes
-        mon_display = f"every {mon_interval}m" if mon_interval > 0 else "disabled"
+        digest_on = c.person_digest_enabled and c.watched_people
+        digest_display = (
+            f"hourly {c.person_digest_start}–{c.person_digest_end} Mon–Fri "
+            f"({len(c.watched_people)} people)"
+            if digest_on else "disabled"
+        )
         lines = [
             "<b>Schedule</b>",
-            f"{clock_emoji(c.morning_briefing)} Morning: {c.morning_briefing}",
-            f"{clock_emoji(c.noon_briefing)} Noon: {c.noon_briefing}",
-            f"{clock_emoji(c.evening_digest)} Evening: {c.evening_digest}",
-            f"Monitoring: {mon_display}",
-            f"Work hours: {c.work_hours_start}–{c.work_hours_end}",
+            f"Person digest: {digest_display}",
+            f"Legacy briefings: {'on' if c.briefings_enabled else 'off'}",
             f"Timezone: {c.timezone}",
+            "",
+            "<i>/digest for delta now · /digest 4 for last 4h</i>",
         ]
         await send_message(self._app.bot, update.effective_chat.id, "\n".join(lines))
 
@@ -632,6 +713,7 @@ class TelegramBot:
             "start": self._cmd_start,
             "status": self._cmd_status,
             "briefing": self._cmd_briefing,
+            "digest": self._cmd_digest,
             "silence": self._cmd_silence,
             "remember": self._cmd_remember,
             "memories": self._cmd_memories,

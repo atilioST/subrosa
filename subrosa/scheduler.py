@@ -19,6 +19,89 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Watermark: ISO-8601 UTC timestamp of the last digest we actually SENT.
+# We only report deltas since this point, and only advance it when we send —
+# so a quiet scan never skips activity and never produces a message.
+_DIGEST_WATERMARK_KEY = "person_digest_last_sent"
+
+
+async def _person_digest_job(
+    agent: Agent,
+    bot: TelegramBot,
+    store: Store,
+    health: Health,
+    config: Config,
+) -> None:
+    """Hourly per-person Slack digest — sends only when there is a delta."""
+    if bot.is_silenced:
+        logger.info("Person digest skipped — silenced")
+        return
+    if not config.watched_people:
+        logger.warning("Person digest skipped — no watched_people configured")
+        return
+
+    from datetime import UTC, datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(UTC)
+    last = await store.get_meta(_DIGEST_WATERMARK_KEY)
+    since_dt = now - timedelta(minutes=config.person_digest_interval_minutes)
+    if last:
+        try:
+            since_dt = datetime.fromisoformat(last)
+        except ValueError:
+            logger.warning("Bad digest watermark %r — falling back to interval", last)
+
+    tz = ZoneInfo(config.timezone)
+    since_local = since_dt.astimezone(tz)
+
+    try:
+        from .context import build_system_prompt, build_person_digest_prompt
+        system_prompt = build_system_prompt(config.briefing_path)
+        prompt = await build_person_digest_prompt(
+            config.watched_people,
+            since_iso=since_dt.isoformat(),
+            since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
+            since_date=since_local.strftime("%Y-%m-%d"),
+            slack_channels=config.slack_channels,
+        )
+
+        response = await asyncio.wait_for(
+            agent.invoke(
+                prompt, system_prompt,
+                trace_name="person-digest",
+                max_turns=config.briefing_max_turns,
+            ),
+            timeout=config.briefing_timeout,
+        )
+        health.record_agent()
+
+        text = response.text.strip()
+
+        if response.is_error:
+            logger.warning("Person digest agent error: %s", text[:200])
+            await store.log_diagnostic("scheduler", "person_digest error", level="error")
+            return  # do not advance watermark — retry the same window next hour
+
+        if not text or text == "NO_CHANGES":
+            logger.info("Person digest — no changes since %s", since_dt.isoformat())
+            return  # stay silent; watermark unchanged so nothing gets skipped
+
+        await bot.send_to_chat(config.chat_id, response.text)
+        await store.set_meta(_DIGEST_WATERMARK_KEY, now.isoformat())
+        await store.log_event(
+            source="scheduler", event_type="person_digest",
+            summary="hourly per-person Slack digest",
+            content=response.text[:500],
+        )
+
+    except asyncio.TimeoutError:
+        logger.warning("Person digest timed out")
+        await store.log_diagnostic("scheduler", "person_digest timeout", level="warning")
+    except Exception:
+        logger.exception("Person digest failed")
+        await store.log_diagnostic("scheduler", "person_digest error", level="error")
+
 
 async def _briefing_job(
     agent: Agent,
@@ -202,32 +285,56 @@ class Scheduler:
         # Day-of-week filter (mon-fri if weekdays_only)
         dow = "mon-fri" if c.weekdays_only else None
 
-        # Morning briefing
-        h, m = map(int, c.morning_briefing.split(":"))
-        self._scheduler.add_job(
-            _briefing_job,
-            CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
-            kwargs={**common, "kind": "morning"},
-            id="morning_briefing", replace_existing=True,
-        )
+        # Legacy fixed-time briefings — disabled by default, kept for opt-in.
+        if c.briefings_enabled:
+            # Morning briefing
+            h, m = map(int, c.morning_briefing.split(":"))
+            self._scheduler.add_job(
+                _briefing_job,
+                CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
+                kwargs={**common, "kind": "morning"},
+                id="morning_briefing", replace_existing=True,
+            )
 
-        # Noon briefing
-        h, m = map(int, c.noon_briefing.split(":"))
-        self._scheduler.add_job(
-            _briefing_job,
-            CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
-            kwargs={**common, "kind": "noon"},
-            id="noon_briefing", replace_existing=True,
-        )
+            # Noon briefing
+            h, m = map(int, c.noon_briefing.split(":"))
+            self._scheduler.add_job(
+                _briefing_job,
+                CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
+                kwargs={**common, "kind": "noon"},
+                id="noon_briefing", replace_existing=True,
+            )
 
-        # Evening digest
-        h, m = map(int, c.evening_digest.split(":"))
-        self._scheduler.add_job(
-            _briefing_job,
-            CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
-            kwargs={**common, "kind": "evening"},
-            id="evening_digest", replace_existing=True,
-        )
+            # Evening digest
+            h, m = map(int, c.evening_digest.split(":"))
+            self._scheduler.add_job(
+                _briefing_job,
+                CronTrigger(hour=h, minute=m, day_of_week=dow, timezone=tz),
+                kwargs={**common, "kind": "evening"},
+                id="evening_digest", replace_existing=True,
+            )
+
+        # Hourly per-person Slack digest (delta-only), work hours, weekdays.
+        if c.person_digest_enabled and c.watched_people:
+            start_h = int(c.person_digest_start.split(":")[0])
+            end_h = int(c.person_digest_end.split(":")[0])
+            pd_interval = c.person_digest_interval_minutes
+            minute_expr = f"*/{pd_interval}" if 0 < pd_interval < 60 else "0"
+            self._scheduler.add_job(
+                _person_digest_job,
+                CronTrigger(
+                    minute=minute_expr,
+                    hour=f"{start_h}-{end_h}",
+                    day_of_week="mon-fri",
+                    timezone=tz,
+                ),
+                kwargs={**common},
+                id="person_digest", replace_existing=True,
+            )
+            logger.info(
+                "Scheduled person digest: %s people, %02d:00-%02d:00 every %dm mon-fri",
+                len(c.watched_people), start_h, end_h, pd_interval,
+            )
 
         # Monitoring poll (during work hours)
         interval = c.monitoring_interval_minutes
@@ -261,8 +368,9 @@ class Scheduler:
                 logger.info("Scheduled skill: %s (%s) — %s", skill_name, label, cron_expr)
 
         logger.info(
-            "Schedule: morning=%s, noon=%s, evening=%s, monitoring=%s (%s-%s %s) weekdays_only=%s",
-            c.morning_briefing, c.noon_briefing, c.evening_digest,
+            "Schedule: briefings=%s, person_digest=%s, monitoring=%s (%s-%s %s) weekdays_only=%s",
+            "on" if c.briefings_enabled else "off",
+            "on" if (c.person_digest_enabled and c.watched_people) else "off",
             f"every {interval}m" if interval > 0 else "disabled",
             c.work_hours_start, c.work_hours_end, tz, c.weekdays_only,
         )
