@@ -40,7 +40,8 @@ class Config:
     model: str = "sonnet"
     max_turns: int = 10
     briefing_max_turns: int = 25
-    agent_timeout: int = 300
+    agent_timeout: int = 300  # soft deadline: notify the user, keep working
+    agent_hard_timeout: int = 1800  # hard ceiling: cancel and return partial output
     briefing_timeout: int = 300
     monitoring_timeout: int = 180
 
@@ -141,6 +142,7 @@ def load_config(path: Path | None = None) -> Config:
         max_turns=ag.get("max_turns", 10),
         briefing_max_turns=ag.get("briefing_max_turns", 25),
         agent_timeout=ag.get("agent_timeout", 300),
+        agent_hard_timeout=ag.get("agent_hard_timeout", 1800),
         briefing_timeout=ag.get("briefing_timeout", 300),
         monitoring_timeout=ag.get("monitoring_timeout", 180),
         briefings_enabled=sched.get("briefings_enabled", False),

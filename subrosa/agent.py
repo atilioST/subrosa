@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -56,6 +57,57 @@ _client.parse_message = _tolerant_parse_message
 
 
 @dataclass
+class ToolCall:
+    name: str
+    detail: str = ""
+
+
+class InvocationProgress:
+    """Live record of an in-flight invocation.
+
+    Written by Agent._do_invoke as SDK messages stream in; read by the
+    WorkingIndicator for live status and by callers to salvage partial
+    output when an invocation is cancelled or hits the hard ceiling.
+    """
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.tools: list[ToolCall] = []
+        self.text_parts: list[str] = []
+        self.continuations = 0
+
+    def note_tool(self, name: str, tool_input: dict | None) -> None:
+        self.tools.append(ToolCall(name=name, detail=_tool_detail(tool_input)))
+
+    def note_text(self, text: str) -> None:
+        self.text_parts.append(text)
+
+    @property
+    def last_tool(self) -> ToolCall | None:
+        return self.tools[-1] if self.tools else None
+
+    @property
+    def partial_text(self) -> str:
+        return "\n".join(self.text_parts)
+
+    @property
+    def elapsed(self) -> float:
+        return time.monotonic() - self.started
+
+
+def _tool_detail(tool_input: dict | None) -> str:
+    """Short human-readable hint of what a tool call is doing."""
+    if not isinstance(tool_input, dict):
+        return ""
+    for key in ("query", "pattern", "url", "path", "file_path", "command", "prompt"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            value = value.strip().replace("\n", " ")
+            return value[:60] + ("…" if len(value) > 60 else "")
+    return ""
+
+
+@dataclass
 class AgentResponse:
     text: str = ""
     session_id: str = ""
@@ -66,14 +118,16 @@ class AgentResponse:
     is_error: bool = False
     tools_used: list[str] = field(default_factory=list)
     narration: str = ""
+    subtype: str = ""
 
 
 class Agent:
     """The ONLY way Claude is invoked in the entire codebase."""
 
-    def __init__(self, model: str = "sonnet", max_turns: int = 10):
+    def __init__(self, model: str = "sonnet", max_turns: int = 10, max_continuations: int = 2):
         self.model = model
         self.max_turns = max_turns
+        self.max_continuations = max_continuations
 
     async def invoke(
         self,
@@ -83,24 +137,51 @@ class Agent:
         trace_name: str = "",
         trace_tags: list[str] | None = None,
         max_turns: int | None = None,
+        progress: InvocationProgress | None = None,
     ) -> AgentResponse:
-        """Invoke Claude. Never raises — returns AgentResponse with is_error on failure."""
+        """Invoke Claude. Never raises (except CancelledError) — returns
+        AgentResponse with is_error on failure. Auto-continues when the CLI
+        stops on the turn cap mid-task."""
         try:
-            return await self._do_invoke(
-                prompt, system_prompt, resume_session, trace_name, trace_tags, max_turns
+            response = await self._do_invoke(
+                prompt, system_prompt, resume_session, trace_name, trace_tags,
+                max_turns, progress,
             )
         except Exception:
             if resume_session:
                 logger.warning("Resume failed, retrying as one-shot")
                 try:
-                    return await self._do_invoke(
-                        prompt, system_prompt, None, trace_name, trace_tags, max_turns
+                    response = await self._do_invoke(
+                        prompt, system_prompt, None, trace_name, trace_tags,
+                        max_turns, progress,
                     )
                 except Exception:
                     logger.exception("Agent invocation failed (one-shot retry)")
+                    return AgentResponse(text="Agent error — please try again.", is_error=True)
             else:
                 logger.exception("Agent invocation failed")
-            return AgentResponse(text="Agent error — please try again.", is_error=True)
+                return AgentResponse(text="Agent error — please try again.", is_error=True)
+
+        for i in range(self.max_continuations):
+            if response.subtype != "error_max_turns" or not response.session_id:
+                break
+            logger.info(
+                "Turn cap hit — auto-continuing (%d/%d)", i + 1, self.max_continuations
+            )
+            if progress:
+                progress.continuations = i + 1
+            try:
+                continued = await self._do_invoke(
+                    "You stopped at the turn limit mid-task. Continue and finish the task.",
+                    system_prompt, response.session_id, trace_name, trace_tags,
+                    max_turns, progress,
+                )
+            except Exception:
+                logger.exception("Continuation failed — returning partial result")
+                break
+            response = _merge_responses(response, continued)
+
+        return response
 
     async def _do_invoke(
         self,
@@ -110,6 +191,7 @@ class Agent:
         trace_name: str,
         trace_tags: list[str] | None,
         max_turns: int | None = None,
+        progress: InvocationProgress | None = None,
     ) -> AgentResponse:
         options = ClaudeAgentOptions(
             model=self.model,
@@ -142,8 +224,12 @@ class Agent:
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         text_parts.append(block.text)
+                        if progress:
+                            progress.note_text(block.text)
                     elif isinstance(block, ToolUseBlock):
                         tools_used.append(block.name)
+                        if progress:
+                            progress.note_tool(block.name, block.input)
                         # Log tool name + input for debugging
                         input_preview = str(block.input)[:200]
                         logger.info("  tool: %s → %s", block.name, input_preview)
@@ -199,4 +285,26 @@ class Agent:
             is_error=result.is_error,
             tools_used=tools_used,
             narration=full_text,
+            subtype=result.subtype,
         )
+
+
+def _merge_responses(prior: AgentResponse, continued: AgentResponse) -> AgentResponse:
+    """Combine a turn-capped response with its continuation."""
+    if continued.is_error and continued.subtype not in ("error_max_turns",):
+        # Continuation itself failed — keep what the first pass produced.
+        text = prior.text
+    else:
+        text = "\n".join(t for t in (prior.text, continued.text) if t)
+    return AgentResponse(
+        text=text,
+        session_id=continued.session_id or prior.session_id,
+        total_cost_usd=(prior.total_cost_usd or 0) + (continued.total_cost_usd or 0),
+        usage=continued.usage,
+        duration_ms=prior.duration_ms + continued.duration_ms,
+        num_turns=prior.num_turns + continued.num_turns,
+        is_error=continued.is_error,
+        tools_used=prior.tools_used + continued.tools_used,
+        narration="\n".join(n for n in (prior.narration, continued.narration) if n),
+        subtype=continued.subtype,
+    )

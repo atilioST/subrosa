@@ -44,11 +44,14 @@ All config lives in `~/.subrosa/`:
 ## Key Design Principles
 
 1. One path to Claude — no session vs one-shot split
-2. Timeouts everywhere — every external await has a deadline
-3. User always gets a response — even on timeout/error
+2. Interactive agent runs are supervised tasks — soft deadline notifies and keeps
+   working, hard ceiling (or /stop) cancels; scheduled jobs keep hard timeouts
+3. User always gets a response — even on cancel/error, partial output is salvaged
+   via InvocationProgress
 4. Flat structure — max 2 layers between handler and Claude SDK
 5. One database — all state in one async SQLite file
 6. Bounded everything — queue max 5, background tasks tracked
+7. Telegram updates process concurrently — a long command must never block /status or /stop
 
 ## Dependencies
 

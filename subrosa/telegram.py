@@ -24,6 +24,8 @@ from telegram.ext import (
     filters,
 )
 
+from .agent import InvocationProgress
+
 if TYPE_CHECKING:
     from telegram import Message
 
@@ -40,8 +42,12 @@ _DEBOUNCE_SECONDS = 2.0
 _MAX_QUEUE = 5
 MAX_LENGTH = MessageLimit.MAX_TEXT_LENGTH  # 4096
 
-# Heartbeat schedule: 30s, 2m, 10m, 30m
-_UPDATE_SCHEDULE = [30, 120, 600, 1800]
+# Live indicator: poll progress every _INDICATOR_POLL seconds, edit the message
+# when tool activity changes or every _INDICATOR_REFRESH seconds regardless.
+_INDICATOR_POLL = 2.0
+_INDICATOR_REFRESH = 20.0
+# Cap on partial output relayed after a stop/timeout.
+_MAX_PARTIAL_CHARS = 3500
 
 
 # ── Send helpers ────────────────────────────────────────────────────────────
@@ -120,14 +126,33 @@ async def send_message(bot: Bot, chat_id: int, text: str) -> None:
 
 # ── WorkingIndicator ────────────────────────────────────────────────────────
 
-class WorkingIndicator:
-    """'Working on it...' with exponential backoff heartbeat."""
+def _fmt_elapsed(seconds: float) -> str:
+    mins, secs = divmod(int(seconds), 60)
+    return f"{mins}m {secs:02d}s" if mins else f"{secs}s"
 
-    def __init__(self, bot: Bot, chat_id: int):
+
+def _short_tool_name(name: str) -> str:
+    """mcp__slack__slack_search_messages → slack_search_messages"""
+    if name.startswith("mcp__"):
+        return name.split("__")[-1]
+    return name
+
+
+class WorkingIndicator:
+    """Live status message: shows current tool activity and elapsed time.
+
+    With an InvocationProgress attached, the message updates as the agent
+    calls tools ("⚙️ slack_search_messages (from:@brock…) · 8 tools · 1m 20s").
+    Without one it just refreshes the elapsed clock.
+    """
+
+    def __init__(self, bot: Bot, chat_id: int, progress: InvocationProgress | None = None):
         self._bot = bot
         self._chat_id = chat_id
+        self._progress = progress
         self._message_id: int | None = None
         self._heartbeat_task: asyncio.Task | None = None
+        self._started = time.monotonic()
 
     async def start(self) -> None:
         try:
@@ -137,15 +162,31 @@ class WorkingIndicator:
             logger.debug("Failed to send working indicator", exc_info=True)
         self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
 
+    def _status_text(self) -> str:
+        clock = _fmt_elapsed(time.monotonic() - self._started)
+        p = self._progress
+        if not p or not p.tools:
+            return f"Working on it... ({clock})"
+        last = p.last_tool
+        detail = f" ({last.detail})" if last.detail else ""
+        count = len(p.tools)
+        plural = "s" if count != 1 else ""
+        rounds = f" · round {p.continuations + 1}" if p.continuations else ""
+        return f"⚙️ {_short_tool_name(last.name)}{detail} · {count} tool{plural} · {clock}{rounds}"
+
     async def _heartbeat_loop(self) -> None:
+        last_edit = 0.0
+        last_signature: tuple | None = None
         try:
-            labels = ["30s", "2m", "10m", "30m"]
-            for delay, label in zip(_UPDATE_SCHEDULE, labels):
-                await asyncio.sleep(delay)
-                await self._edit(f"Still working... ({label})")
             while True:
-                await asyncio.sleep(1800)
-                await self._edit("Still working... (30m+)")
+                await asyncio.sleep(_INDICATOR_POLL)
+                p = self._progress
+                signature = (len(p.tools), p.continuations) if p else None
+                now = time.monotonic()
+                if signature != last_signature or now - last_edit >= _INDICATOR_REFRESH:
+                    await self._edit(self._status_text())
+                    last_edit = now
+                    last_signature = signature
         except asyncio.CancelledError:
             pass
 
@@ -207,6 +248,7 @@ class TelegramBot:
 
         self._pending: dict[int, tuple[list[str], asyncio.Task]] = {}
         self._current_task: str | None = None
+        self._current_invocation: asyncio.Task | None = None
         self._queued: list[tuple[int, str, list[dict] | None]] = []
         self._silence_until: float = 0.0
 
@@ -295,7 +337,8 @@ class TelegramBot:
 
     async def _execute_skill(self, chat_id: int, skill) -> None:
         """Execute a skill and send response."""
-        indicator = WorkingIndicator(self._app.bot, chat_id)
+        progress = InvocationProgress()
+        indicator = WorkingIndicator(self._app.bot, chat_id, progress=progress)
         try:
             await indicator.start()
             from .context import build_system_prompt
@@ -303,7 +346,10 @@ class TelegramBot:
 
             # Inject skill instruction as user prompt
             response = await asyncio.wait_for(
-                self._agent.invoke(skill.instruction, system_prompt, trace_name=f"skill-{skill.name}"),
+                self._agent.invoke(
+                    skill.instruction, system_prompt,
+                    trace_name=f"skill-{skill.name}", progress=progress,
+                ),
                 timeout=self._config.briefing_timeout,
             )
             self._health.record_agent()
@@ -337,10 +383,28 @@ class TelegramBot:
             except Exception:
                 logger.exception("Failed to process queued message")
 
+    def _stopped_summary(self, reason: str, progress: InvocationProgress) -> str:
+        """Summarize a cancelled/timed-out invocation, salvaging partial output."""
+        lines = [f"⏹ {reason} after {_fmt_elapsed(progress.elapsed)}."]
+        if progress.tools:
+            last = progress.last_tool
+            lines.append(
+                f"{len(progress.tools)} tool call(s), last: {_short_tool_name(last.name)}"
+            )
+        partial = progress.partial_text.strip()
+        if partial:
+            if len(partial) > _MAX_PARTIAL_CHARS:
+                partial = "…" + partial[-_MAX_PARTIAL_CHARS:]
+            lines.append(f"\nPartial output:\n{partial}")
+        else:
+            lines.append("No text output yet.")
+        return "\n".join(lines)
+
     async def _do_process(self, chat_id: int, text: str, media_files: list[dict] | None = None) -> None:
         """The critical path: user message → agent → response."""
         self._current_task = text[:60] + ("..." if len(text) > 60 else "")
-        indicator = WorkingIndicator(self._app.bot, chat_id)
+        progress = InvocationProgress()
+        indicator = WorkingIndicator(self._app.bot, chat_id, progress=progress)
         start = time.monotonic()
         try:
             await indicator.start()
@@ -386,15 +450,51 @@ class TelegramBot:
                 procedure_manager=self._procedure_manager,
             )
 
-            # Invoke agent with timeout
-            response = await asyncio.wait_for(
+            # Invoke agent as a supervised task: soft deadline notifies and
+            # keeps working; only the hard ceiling (or /stop) cancels.
+            invoke_task = asyncio.create_task(
                 self._agent.invoke(
                     user_prompt, system_prompt,
                     resume_session=resume_session,
                     trace_name="interactive",
-                ),
-                timeout=self._config.agent_timeout,
+                    progress=progress,
+                )
             )
+            self._current_invocation = invoke_task
+
+            soft = self._config.agent_timeout
+            hard = max(self._config.agent_hard_timeout, soft + 1)
+            done, _ = await asyncio.wait({invoke_task}, timeout=soft)
+            if not done:
+                await send_message(
+                    self._app.bot, chat_id,
+                    f"Taking longer than {soft // 60}m — still working. /stop to cancel.",
+                )
+                done, _ = await asyncio.wait({invoke_task}, timeout=hard - soft)
+
+            if not done:
+                invoke_task.cancel()
+                try:
+                    await invoke_task
+                except asyncio.CancelledError:
+                    pass
+                await indicator.delete()
+                await send_message(
+                    self._app.bot, chat_id,
+                    self._stopped_summary(f"Hit the {hard // 60}m ceiling", progress),
+                )
+                return
+
+            if invoke_task.cancelled():
+                # /stop cancelled us mid-flight
+                await indicator.delete()
+                await send_message(
+                    self._app.bot, chat_id,
+                    self._stopped_summary("Stopped", progress),
+                )
+                return
+
+            response = invoke_task.result()
 
             self._health.record_agent()
             self._health.record_response()
@@ -424,6 +524,8 @@ class TelegramBot:
             if elapsed > 10:
                 tools = f", {len(response.tools_used)} tools" if response.tools_used else ""
                 result += f"\n\n— {elapsed:.0f}s{tools}"
+            if response.subtype == "error_max_turns":
+                result += "\n\n⚠️ Stopped at the turn limit — reply \"continue\" to keep going."
 
             await indicator.finalize(result)
 
@@ -440,19 +542,13 @@ class TelegramBot:
                     final_response=response.text,
                 )
 
-        except asyncio.TimeoutError:
-            await indicator.delete()
-            timeout_min = self._config.agent_timeout // 60
-            await send_message(
-                self._app.bot, chat_id,
-                f"Agent timed out ({timeout_min}m). Try again or /stop.",
-            )
         except Exception:
             logger.exception("Error processing message")
             await indicator.delete()
             await send_message(self._app.bot, chat_id, "Something went wrong.")
         finally:
             self._current_task = None
+            self._current_invocation = None
 
     # ── Commands ────────────────────────────────────────────────────────
 
@@ -505,7 +601,8 @@ class TelegramBot:
     async def _cmd_briefing(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = update.effective_chat.id
         kind = context.args[0] if context.args else "morning"
-        indicator = WorkingIndicator(self._app.bot, chat_id)
+        progress = InvocationProgress()
+        indicator = WorkingIndicator(self._app.bot, chat_id, progress=progress)
         try:
             await indicator.start()
             from .context import build_system_prompt, build_briefing_prompt
@@ -516,6 +613,7 @@ class TelegramBot:
                     prompt, system_prompt,
                     trace_name=f"briefing-{kind}",
                     max_turns=self._config.briefing_max_turns,
+                    progress=progress,
                 ),
                 timeout=self._config.briefing_timeout,
             )
@@ -570,7 +668,8 @@ class TelegramBot:
         tz = ZoneInfo(c.timezone)
         since_local = since_dt.astimezone(tz)
 
-        indicator = WorkingIndicator(self._app.bot, chat_id)
+        progress = InvocationProgress()
+        indicator = WorkingIndicator(self._app.bot, chat_id, progress=progress)
         try:
             await indicator.start()
             from .context import build_system_prompt, build_person_digest_prompt
@@ -587,6 +686,7 @@ class TelegramBot:
                     prompt, system_prompt,
                     trace_name="person-digest-manual",
                     max_turns=c.briefing_max_turns,
+                    progress=progress,
                 ),
                 timeout=c.briefing_timeout,
             )
@@ -673,12 +773,21 @@ class TelegramBot:
 
     async def _cmd_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = update.effective_chat.id
+        replies = []
+
+        invocation = self._current_invocation
+        if invocation and not invocation.done():
+            invocation.cancel()
+            replies.append(f"Stopping: {self._current_task}")
+
         if self._queued:
             count = len(self._queued)
             self._queued.clear()
-            await send_message(self._app.bot, chat_id, f"Cleared {count} queued message(s).")
-        else:
-            await send_message(self._app.bot, chat_id, "Nothing queued.")
+            replies.append(f"Cleared {count} queued message(s).")
+
+        if not replies:
+            replies.append("Nothing running or queued.")
+        await send_message(self._app.bot, chat_id, "\n".join(replies))
 
     async def _cmd_restart(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await send_message(self._app.bot, update.effective_chat.id, "Restarting...")
@@ -707,7 +816,15 @@ class TelegramBot:
     # ── Build app ───────────────────────────────────────────────────────
 
     def build_app(self) -> Application:
-        self._app = ApplicationBuilder().token(self._config.bot_token).build()
+        # concurrent_updates: without it PTB processes updates sequentially, so a
+        # long-running command handler (/briefing, /digest) freezes the whole bot
+        # — no /status, no /stop, no new messages until it finishes.
+        self._app = (
+            ApplicationBuilder()
+            .token(self._config.bot_token)
+            .concurrent_updates(True)
+            .build()
+        )
 
         commands = {
             "start": self._cmd_start,
