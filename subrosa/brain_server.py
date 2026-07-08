@@ -1,7 +1,8 @@
 """Open Brain MCP server.
 
-Exposes the knowledge store as an MCP server over HTTP SSE, bound to
-127.0.0.1 by default (LAN exposure is Phase 4).
+Exposes the knowledge store as an MCP server over streamable HTTP (`/mcp`),
+with the legacy SSE transport (`/sse`) kept alive for a transition window.
+Runs stateless so a Subrosa restart never invalidates client sessions.
 
 Tools:
   search_knowledge   — semantic search over knowledge_embeddings
@@ -11,7 +12,14 @@ Tools:
   add_domain         — extend the ontology with a new domain
   add_primitive      — extend the ontology with a new primitive
 
-Auth: every request must carry Authorization: Bearer <brain_token>.
+Endpoints:
+  /mcp      — streamable HTTP MCP transport (preferred)
+  /sse      — legacy SSE transport (deprecated, kept for old clients)
+  /healthz  — unauthenticated JSON: knowledge count, distillation freshness
+
+Auth: every request except /healthz must carry Authorization: Bearer <brain_token>.
+The auth layer is pure ASGI — Starlette's BaseHTTPMiddleware is incompatible
+with streaming responses (it asserts on client disconnect mid-stream).
 
 Architecture note: the MCP server runs as a background asyncio task inside
 the Subrosa process, sharing the Store instance (same SQLite connection,
@@ -21,14 +29,13 @@ same embedding model singleton). No second process, no second DB connection.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.fastmcp import FastMCP
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
 
 if TYPE_CHECKING:
     from .config import Config
@@ -38,24 +45,56 @@ logger = logging.getLogger(__name__)
 
 # Module-level references set by start()
 _store: Store | None = None
-_token: str = ""
+_started_at: float = time.monotonic()
 
 
-# ── Auth middleware ──────────────────────────────────────────────────────────
+# ── ASGI helpers ─────────────────────────────────────────────────────────────
 
-class BearerTokenMiddleware(BaseHTTPMiddleware):
-    """Reject requests that don't carry the correct bearer token."""
+async def _send_plain(send, status: int, body: bytes, content_type: bytes = b"text/plain") -> None:
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [
+            (b"content-type", content_type),
+            (b"content-length", str(len(body)).encode()),
+        ],
+    })
+    await send({"type": "http.response.body", "body": body})
 
-    def __init__(self, app, token: str):
-        super().__init__(app)
-        self._token = token
 
-    async def dispatch(self, request: Request, call_next):
-        if self._token:
-            auth = request.headers.get("Authorization", "")
-            if not auth.startswith("Bearer ") or auth[7:] != self._token:
-                return Response("Unauthorized", status_code=401)
-        return await call_next(request)
+class BearerAuthASGI:
+    """Pure ASGI bearer-token auth (no BaseHTTPMiddleware — see module docstring)."""
+
+    def __init__(self, app, token: str, exempt_paths: frozenset[str] = frozenset()):
+        self._app = app
+        self._token = token.encode()
+        self._exempt = exempt_paths
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and self._token and scope.get("path") not in self._exempt:
+            auth = b""
+            for key, value in scope.get("headers", []):
+                if key == b"authorization":
+                    auth = value
+                    break
+            if not hmac.compare_digest(auth, b"Bearer " + self._token):
+                await _send_plain(send, 401, b"Unauthorized")
+                return
+        await self._app(scope, receive, send)
+
+
+async def _healthz(scope, receive, send) -> None:
+    """Unauthenticated liveness + freshness probe."""
+    body: dict[str, Any] = {"status": "ok"}
+    try:
+        if _store is not None:
+            body["knowledge_count"] = await _store.knowledge_count()
+            body["last_distilled_at"] = await _store.get_meta("last_distilled_at")
+        body["uptime_seconds"] = int(time.monotonic() - _started_at)
+    except Exception:
+        logger.debug("healthz store query failed", exc_info=True)
+        body = {"status": "degraded"}
+    await _send_plain(send, 200, json.dumps(body).encode(), b"application/json")
 
 
 # ── FastMCP server ───────────────────────────────────────────────────────────
@@ -67,6 +106,9 @@ mcp = FastMCP(
         "Use search_knowledge for semantic queries, query_entity for entity-specific lookups, "
         "get_domain_brief for VP-domain summaries, and capture_thought to write new knowledge."
     ),
+    # Stateless: each request is self-contained, so server restarts never
+    # leave clients holding dead session ids.
+    stateless_http=True,
 )
 
 
@@ -299,31 +341,49 @@ async def _classify_thought(
 
 # ── Lifecycle ────────────────────────────────────────────────────────────────
 
+def _build_asgi(config: Config):
+    """Root ASGI app: /healthz + streamable HTTP (/mcp) + legacy SSE (/sse)."""
+    sse_app = mcp.sse_app()          # serves /sse (GET) + /messages/ (POST)
+    http_app = mcp.streamable_http_app()  # serves /mcp
+
+    async def root(scope, receive, send):
+        if scope["type"] == "lifespan":
+            # The streamable transport's session manager lives in http_app's
+            # lifespan; SSE has no lifespan requirements.
+            await http_app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        if scope["type"] == "http" and path == "/healthz":
+            await _healthz(scope, receive, send)
+            return
+        if path == "/sse" or path.startswith("/messages"):
+            await sse_app(scope, receive, send)
+            return
+        await http_app(scope, receive, send)
+
+    if not config.brain_token:
+        logger.warning("Brain server: no token configured — running without auth")
+        return root
+    return BearerAuthASGI(root, config.brain_token, exempt_paths=frozenset({"/healthz"}))
+
+
 async def _serve(config: Config) -> None:
-    """Run the MCP SSE server as a long-running async task."""
+    """Run the MCP server as a long-running async task."""
     import uvicorn
 
-    raw_app = mcp.sse_app()
-    # Wrap with bearer token auth if token is configured
-    if config.brain_token:
-        from starlette.applications import Starlette
-        from starlette.routing import Mount
-        wrapped = Starlette(routes=[Mount("/", app=raw_app)])
-        wrapped.add_middleware(BearerTokenMiddleware, token=config.brain_token)
-        app: Any = wrapped
-    else:
-        logger.warning("Brain server: no token configured — running without auth")
-        app = raw_app
-
     cfg = uvicorn.Config(
-        app,
+        _build_asgi(config),
         host=config.brain_host,
         port=config.brain_port,
         log_level="warning",
         access_log=False,
+        lifespan="on",
     )
     server = uvicorn.Server(cfg)
-    logger.info("Brain server starting on %s:%d", config.brain_host, config.brain_port)
+    logger.info(
+        "Brain server starting on %s:%d (/mcp streamable, /sse legacy, /healthz)",
+        config.brain_host, config.brain_port,
+    )
     await server.serve()
 
 
@@ -332,9 +392,9 @@ def start(store: Store, config: Config) -> asyncio.Task:
     Start the brain MCP server as a background asyncio task.
     Returns the task so the caller can track it.
     """
-    global _store, _token
+    global _store, _started_at
     _store = store
-    _token = config.brain_token
+    _started_at = time.monotonic()
 
     task = asyncio.create_task(_serve(config))
     task.add_done_callback(_on_done)
