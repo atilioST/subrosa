@@ -1020,6 +1020,33 @@ class Store:
             grouped.setdefault(row["primitive"], []).append(row)
         return grouped
 
+    async def get_events_after_id(self, after_id: int | None = None, limit: int = 500) -> list[dict]:
+        """
+        Fetch events with id greater than the cursor, oldest-first, for distillation.
+        An id cursor (vs a timestamp) can't skip same-second events and paginates
+        cleanly past `limit`. If after_id is None, returns the last 24 hours as a
+        safe first-run default (explicit backfill is a separate path).
+        """
+        if after_id is not None:
+            cursor = await self._db.execute(
+                "SELECT * FROM events WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (after_id, limit),
+            )
+        else:
+            cursor = await self._db.execute(
+                "SELECT * FROM events WHERE timestamp > datetime('now', '-24 hours') ORDER BY id ASC LIMIT ?",
+                (limit,),
+            )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def knowledge_count(self, active_only: bool = True) -> int:
+        query = "SELECT COUNT(*) as cnt FROM knowledge"
+        if active_only:
+            query += " WHERE active = 1"
+        cursor = await self._db.execute(query)
+        row = await cursor.fetchone()
+        return row["cnt"]
+
     async def get_events_since(self, since: str | None = None, limit: int = 500) -> list[dict]:
         """
         Fetch events after a given ISO timestamp for distillation.

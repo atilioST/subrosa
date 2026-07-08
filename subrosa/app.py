@@ -142,6 +142,11 @@ async def _async_main() -> None:
     # Start scheduler
     scheduler.start()
 
+    # Catch-up distillation: drain any events that accumulated while down.
+    # Cheap no-op when the cursor is current.
+    if config.brain_enabled and config.brain_distill_interval_minutes > 0:
+        distiller.schedule()
+
     # Send startup notification
     if config.chat_id:
         try:

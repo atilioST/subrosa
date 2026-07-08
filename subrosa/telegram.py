@@ -581,6 +581,20 @@ class TelegramBot:
         except Exception:
             pass
 
+        # Brain: knowledge count + distillation freshness
+        try:
+            k_count = await self._store.knowledge_count()
+            last = await self._store.get_meta("last_distilled_at")
+            if last:
+                delta = datetime.now(UTC) - datetime.fromisoformat(last)
+                mins = delta.total_seconds() / 60
+                ago = f"{mins:.0f}m ago" if mins < 120 else f"{mins / 60:.0f}h ago"
+            else:
+                ago = "never"
+            lines.append(f"Brain: {k_count} knowledge items, last distilled {ago}")
+        except Exception:
+            pass
+
         # Recent diagnostics
         try:
             diags = await self._store.get_recent_diagnostics(hours=24)

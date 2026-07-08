@@ -137,6 +137,7 @@ def _parse_json_response(text: str) -> list[dict]:
 
 
 _CLAUDE_CLI = "/home/ati/.local/bin/claude"
+_HAIKU_TIMEOUT = 120  # seconds — a hung CLI must not stall the pipeline
 
 
 async def _call_haiku(prompt: str, model: str) -> list[dict]:
@@ -155,7 +156,15 @@ async def _call_haiku(prompt: str, model: str) -> list[dict]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=_HAIKU_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()  # reap the killed process
+            logger.warning("Claude CLI timed out after %ds during distillation", _HAIKU_TIMEOUT)
+            return []
         if proc.returncode != 0:
             err = stderr.decode(errors="replace").strip()
             logger.warning("Claude CLI exited %d: %s", proc.returncode, err[:200])
@@ -250,20 +259,42 @@ class Distiller:
 
     async def run(self) -> int:
         """
-        Production path: fetch unprocessed events, distill, update watermark.
-        Returns the count of knowledge items written.
+        Production path: fetch unprocessed events by id cursor, distill, advance
+        the cursor. Loops until the backlog is drained (each fetch is capped at
+        500 events). Returns the count of knowledge items written.
         """
-        last_distilled = await self._store.get_meta("last_distilled_at")
-        events = await self._store.get_events_since(last_distilled)
+        total_events = 0
+        total_items = 0
 
-        if not events:
-            logger.debug("Distiller: no new events since %s", last_distilled)
-            return 0
+        while True:
+            cursor = await self._store.get_meta("last_distilled_event_id")
+            events = await self._store.get_events_after_id(
+                int(cursor) if cursor else None
+            )
+            if not events:
+                break
 
-        logger.info("Distiller: processing %d new event(s) since %s", len(events), last_distilled)
-        count = await self.distill(events)
-        await self._store.set_meta("last_distilled_at", datetime.now(UTC).isoformat())
-        return count
+            logger.info(
+                "Distiller: processing %d new event(s) after id %s",
+                len(events), cursor or "(first run, 24h window)",
+            )
+            total_items += await self.distill(events)
+            total_events += len(events)
+            # Advance the cursor after each drained batch so a crash mid-backlog
+            # never reprocesses what was already distilled.
+            await self._store.set_meta("last_distilled_event_id", str(events[-1]["id"]))
+            await self._store.set_meta(
+                "last_distilled_at", datetime.now(UTC).isoformat()
+            )
+
+        if total_events:
+            await self._store.log_diagnostic(
+                "distiller",
+                f"distilled {total_events} events → {total_items} knowledge items",
+            )
+        else:
+            logger.debug("Distiller: no new events")
+        return total_items
 
     def schedule(self) -> None:
         """Fire-and-forget: run distillation as a background task."""

@@ -25,12 +25,22 @@ logger = logging.getLogger(__name__)
 _DIGEST_WATERMARK_KEY = "person_digest_last_sent"
 
 
+async def _distill_job(distiller: Distiller, store: Store) -> None:
+    """Scheduled distillation — drain new events into the knowledge table."""
+    try:
+        await distiller.run()
+    except Exception:
+        logger.exception("Scheduled distillation failed")
+        await store.log_diagnostic("distiller", "scheduled run failed", level="error")
+
+
 async def _person_digest_job(
     agent: Agent,
     bot: TelegramBot,
     store: Store,
     health: Health,
     config: Config,
+    distiller: Distiller | None = None,
 ) -> None:
     """Hourly per-person Slack digest — sends only when there is a delta."""
     if bot.is_silenced:
@@ -101,6 +111,10 @@ async def _person_digest_job(
     except Exception:
         logger.exception("Person digest failed")
         await store.log_diagnostic("scheduler", "person_digest error", level="error")
+
+    # Distill freshly logged events right away (no-op if nothing new)
+    if distiller is not None:
+        distiller.schedule()
 
 
 async def _briefing_job(
@@ -328,7 +342,7 @@ class Scheduler:
                     day_of_week="mon-fri",
                     timezone=tz,
                 ),
-                kwargs={**common},
+                kwargs={**common, "distiller": self._distiller},
                 id="person_digest", replace_existing=True,
             )
             logger.info(
@@ -350,6 +364,29 @@ class Scheduler:
                 ),
                 kwargs={**common, "distiller": self._distiller},
                 id="monitoring_poll", replace_existing=True,
+            )
+
+        # Scheduled distillation: events → knowledge table. Runs during work
+        # hours, offset to :30 so it never races the top-of-hour digest.
+        di = c.brain_distill_interval_minutes
+        if c.brain_enabled and di > 0 and self._distiller is not None:
+            work_start_h = int(c.work_hours_start.split(":")[0])
+            work_end_h = int(c.work_hours_end.split(":")[0])
+            minute_expr = f"*/{di}" if 0 < di < 60 else "30"
+            self._scheduler.add_job(
+                _distill_job,
+                CronTrigger(
+                    minute=minute_expr,
+                    hour=f"{work_start_h}-{work_end_h}",
+                    day_of_week=dow,
+                    timezone=tz,
+                ),
+                kwargs={"distiller": self._distiller, "store": self._store},
+                id="distill", replace_existing=True,
+            )
+            logger.info(
+                "Scheduled distillation: every %dm, %02d:00-%02d:00 %s",
+                di if di < 60 else 60, work_start_h, work_end_h, tz,
             )
 
         # Skill schedules

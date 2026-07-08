@@ -103,6 +103,7 @@ class Config:
     brain_host: str = "127.0.0.1"
     brain_port: int = 7771
     brain_token: str = ""
+    brain_distill_interval_minutes: int = 60  # 0 disables scheduled distillation
 
     # Logging
     log_level: str = "INFO"
@@ -185,5 +186,6 @@ def load_config(path: Path | None = None) -> Config:
         brain_host=brain.get("host", "127.0.0.1"),
         brain_port=brain.get("port", 7771),
         brain_token=brain.get("token", ""),
+        brain_distill_interval_minutes=brain.get("distill_interval_minutes", 60),
         log_level=log.get("level", "INFO"),
     )
