@@ -106,8 +106,16 @@ def _format_events(events: list[dict]) -> str:
         source = e.get("source", "unknown")
         channel = e.get("channel", e.get("event_type", ""))
         ts = e.get("timestamp", e.get("ts", ""))
-        summary = e.get("summary", e.get("content", ""))
-        line = f"[{eid}] {source}/{channel} {ts}\n{summary}"
+        # Events carry two distinct fields: summary (e.g. the user's message,
+        # or a constant job label) and content (the response/digest body).
+        # Haiku needs both — showing only the summary hides digest content.
+        summary = e.get("summary") or ""
+        content = e.get("content") or ""
+        body_parts = [p for p in (summary, content) if p]
+        if len(body_parts) == 2 and body_parts[0] == body_parts[1]:
+            body_parts = body_parts[:1]
+        body = "\n".join(body_parts)
+        line = f"[{eid}] {source}/{channel} {ts}\n{body}"
         parts.append(line)
     return "\n\n".join(parts)
 

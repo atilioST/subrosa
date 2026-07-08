@@ -102,7 +102,7 @@ async def _person_digest_job(
         await store.log_event(
             source="scheduler", event_type="person_digest",
             summary="hourly per-person Slack digest",
-            content=response.text[:500],
+            content=response.text[:4000],
         )
 
     except asyncio.TimeoutError:
@@ -153,7 +153,7 @@ async def _briefing_job(
         await store.log_event(
             source="scheduler", event_type=f"briefing_{kind}",
             summary=f"{kind} briefing",
-            content=response.text[:500],
+            content=response.text[:4000],
         )
 
     except asyncio.TimeoutError:
@@ -202,7 +202,7 @@ async def _skill_job(
         await store.log_event(
             source="scheduler", event_type=f"skill_{skill_name}",
             summary=f"{skill_name} skill",
-            content=response.text[:500],
+            content=response.text[:4000],
         )
 
     except asyncio.TimeoutError:
@@ -249,7 +249,7 @@ async def _monitoring_job(
             await store.log_event(
                 source="scheduler", event_type="monitoring",
                 summary="monitoring insights",
-                content=response.text[:500],
+                content=response.text[:4000],
             )
 
     except asyncio.TimeoutError:
