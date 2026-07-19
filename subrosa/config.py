@@ -56,13 +56,14 @@ class Config:
     timezone: str = "America/Denver"
     weekdays_only: bool = False
 
-    # Per-person hourly Slack digest (delta-only)
-    person_digest_enabled: bool = True
-    person_digest_interval_minutes: int = 60
-    person_digest_start: str = "08:00"
-    person_digest_end: str = "18:00"
-    # Ordered watched people (priority order). Each: {"name": str, "handle": str}
-    watched_people: list[dict] = field(default_factory=list)
+    # Hourly Slack alert scan (delta-only): mentions, key-people criticals,
+    # red-alert channel, error assessment. interval_minutes also sets the
+    # fallback look-back window when no watermark exists yet.
+    hourly_scan_enabled: bool = True
+    hourly_scan_interval_minutes: int = 60
+    hourly_scan_start: str = "08:00"
+    hourly_scan_end: str = "18:00"
+    hourly_scan_jitter_seconds: int = 120
 
     # Monitoring scope
     slack_channels: list[str] = field(default_factory=list)
@@ -123,7 +124,7 @@ def load_config(path: Path | None = None) -> Config:
     tg = raw.get("telegram", {})
     sched = raw.get("schedule", {})
     work_hours = sched.get("work_hours", {})
-    person_digest = sched.get("person_digest", {})
+    hourly_scan = sched.get("hourly_scan", sched.get("person_digest", {}))
     mon = raw.get("monitoring", {})
     ag = raw.get("agent", {})
     lf = raw.get("langfuse", {})
@@ -155,11 +156,11 @@ def load_config(path: Path | None = None) -> Config:
         work_hours_end=work_hours.get("end", "19:00"),
         timezone=sched.get("timezone", "America/Denver"),
         weekdays_only=sched.get("weekdays_only", False),
-        person_digest_enabled=person_digest.get("enabled", True),
-        person_digest_interval_minutes=person_digest.get("interval_minutes", 60),
-        person_digest_start=person_digest.get("start", "08:00"),
-        person_digest_end=person_digest.get("end", "18:00"),
-        watched_people=raw.get("people", []),
+        hourly_scan_enabled=hourly_scan.get("enabled", True),
+        hourly_scan_interval_minutes=hourly_scan.get("interval_minutes", 60),
+        hourly_scan_start=hourly_scan.get("start", "08:00"),
+        hourly_scan_end=hourly_scan.get("end", "18:00"),
+        hourly_scan_jitter_seconds=hourly_scan.get("jitter_seconds", 120),
         slack_channels=mon.get("slack_channels", []),
         jira_projects=mon.get("jira_projects", []),
         github_repos=mon.get("github_repos", []),

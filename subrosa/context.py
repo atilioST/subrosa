@@ -652,19 +652,16 @@ async def build_monitoring_prompt(
     return result
 
 
-async def build_person_digest_prompt(
-    watched_people: list[dict],
-    since_iso: str,
+async def build_hourly_scan_prompt(
     since_human: str,
     since_date: str,
-    slack_channels: list[str] | None = None,
 ) -> str:
-    """Build prompt for the hourly per-person Slack digest (delta-only).
+    """Build prompt for the hourly alert scan (delta-only).
 
-    Summarizes what each watched person has posted since ``since_iso``, in the
-    given priority order, omitting anyone with no new activity. Folds in a P0
-    safety net for @atilio mentions and Class 1/2 incidents. Emits the exact
-    sentinel ``NO_CHANGES`` when nothing new is found so the scheduler stays
+    Checks four things since the cutoff: @atilio mentions anywhere, critical
+    posts from Brock or Walter, any activity in #red_alert_scout_ai, and an
+    assessment of new errors in #eng-scout_errors. Emits the exact sentinel
+    ``NO_CHANGES`` when nothing meets the criteria so the scheduler stays
     silent.
     """
     # Slack's `after:` modifier is EXCLUSIVE of the date given (after:2026-07-01
@@ -677,14 +674,10 @@ async def build_person_digest_prompt(
     except ValueError:
         after_date = since_date
 
-    people_lines = []
-    for i, p in enumerate(watched_people, start=1):
-        name = p.get("name", p.get("handle", "?"))
-        handle = p.get("handle", "")
-        people_lines.append(f"{i}. **{name}** — search `from:@{handle} after:{after_date}`")
-
     parts = [
-        "Hourly Slack scan. Report ONLY what is NEW since the last digest.",
+        "Hourly Slack alert scan. Report ONLY what is NEW since the last scan"
+        " and meets the criteria below. This is an alert channel, not a digest —"
+        " when in doubt about routine chatter, leave it out.",
         "",
         f"**Cutoff:** only include messages posted at or after {since_human}.",
         f"Search with `after:{after_date}` (one day BEFORE the cutoff — Slack's"
@@ -693,47 +686,40 @@ async def build_person_digest_prompt(
         f" whose actual timestamp is before {since_human}. Do NOT change the"
         f" `after:` date to the cutoff date — that would drop today's messages.",
         "",
-        "## WATCHED PEOPLE — report in this exact order",
+        "## WHAT TO CHECK",
         "",
-        "For each person below, use slack_search_messages to find their posts"
-        " since the cutoff. Summarize what they posted ABOUT (topics, decisions,"
-        " asks, blockers) — not a message-by-message dump. Include channel names.",
-        "",
-        *people_lines,
-        "",
-        "## P0 SAFETY NET (always check, regardless of who posted)",
-        "",
-        "- **@atilio mentions** — `slack_search_messages` query `@atilio after:"
-        f"{after_date}`. Any new mention of Atilio anywhere is important.",
-        "- **Class 1/2 incidents** — search `in:class1` and `in:class2` for new"
-        " activity. These are dynamically created incident channels.",
+        "1. **@atilio mentions — any channel** — `slack_search_messages` query"
+        f" `@atilio after:{after_date}`. Report EVERY new mention of Atilio,"
+        " wherever it appears.",
+        "2. **Critical posts from Brock or Walter** — search"
+        f" `from:@mbrocklehurst after:{after_date}` and"
+        f" `from:@wthorn after:{after_date}`. Report ONLY critical items:"
+        " directives, escalations, incidents, decisions, blockers, or direct"
+        " asks. Skip routine chatter, acknowledgements, and casual replies.",
+        "3. **#red_alert_scout_ai — any activity** — search"
+        f" `in:red_alert_scout_ai after:{after_date}`. ANYTHING posted in this"
+        " channel since the cutoff gets reported.",
+        "4. **#eng-scout_errors — error assessment** — search"
+        f" `in:eng-scout_errors after:{after_date}`. If there are new posts,"
+        " give a short assessment: what errors occurred, new vs recurring,"
+        " apparent severity and customer impact, and whether anything needs"
+        " action. If there are no new posts, omit this section entirely.",
         "",
         "## OUTPUT RULES",
         "",
-        "- Order sections by the watched-people priority above.",
-        "- **OMIT any person with no new posts since the cutoff.** Do not write"
-        " 'no activity' lines — just leave them out.",
-        "- If there is any new @atilio mention or Class 1/2 incident activity, put"
-        " it FIRST under a `‼️ Needs attention` heading, before the per-person"
-        " sections.",
-        "- One short heading per person (their name) followed by 1–3 concise bullets.",
+        "- Put @atilio mentions and #red_alert_scout_ai activity FIRST under a"
+        " `‼️ Needs attention` heading, then Brock/Walter critical items, then"
+        " the error assessment.",
+        "- OMIT any section with nothing to report — no 'no activity' lines.",
+        "- 1–3 concise bullets per section. Include channel names and who said it.",
         "- Keep it tight and mobile-friendly. No preamble, no pleasantries.",
         "- NEVER mention sprints — Scout uses Kanban.",
         "",
         "## CRITICAL — DELTA SUPPRESSION",
         "",
-        "If NO watched person posted anything new since the cutoff AND there are no"
-        " new @atilio mentions or Class 1/2 incidents, respond with exactly:"
-        " NO_CHANGES",
+        "If nothing since the cutoff meets ANY of the four criteria, respond with"
+        " exactly: NO_CHANGES",
         "(nothing else — no explanation).",
     ]
-
-    if slack_channels:
-        channels = ", ".join(f"#{c}" for c in slack_channels)
-        parts.extend([
-            "",
-            f"## Channel scope hint: watched people are most active in {channels}."
-            " You may also find posts elsewhere — that's fine.",
-        ])
 
     return "\n".join(parts)

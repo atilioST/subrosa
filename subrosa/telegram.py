@@ -642,9 +642,9 @@ class TelegramBot:
             await send_message(self._app.bot, chat_id, "Failed to generate briefing.")
 
     async def _cmd_digest(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Manually run the per-person Slack digest.
+        """Manually run the hourly Slack alert scan.
 
-        `/digest`     — delta since the last digest sent (advances the watermark).
+        `/digest`     — delta since the last scan sent (advances the watermark).
         `/digest 4`   — ad-hoc look-back over the last 4 hours (watermark untouched).
         Always replies, even when there is nothing new.
         """
@@ -653,11 +653,8 @@ class TelegramBot:
 
         chat_id = update.effective_chat.id
         c = self._config
-        if not c.watched_people:
-            await send_message(self._app.bot, chat_id, "No watched people configured.")
-            return
 
-        from .scheduler import _DIGEST_WATERMARK_KEY
+        from .scheduler import _SCAN_WATERMARK_KEY
 
         now = datetime.now(UTC)
         hours_arg = None
@@ -671,8 +668,8 @@ class TelegramBot:
         if hours_arg is not None:
             since_dt = now - timedelta(hours=hours_arg)
         else:
-            since_dt = now - timedelta(minutes=c.person_digest_interval_minutes)
-            last = await self._store.get_meta(_DIGEST_WATERMARK_KEY)
+            since_dt = now - timedelta(minutes=c.hourly_scan_interval_minutes)
+            last = await self._store.get_meta(_SCAN_WATERMARK_KEY)
             if last:
                 try:
                     since_dt = datetime.fromisoformat(last)
@@ -686,19 +683,16 @@ class TelegramBot:
         indicator = WorkingIndicator(self._app.bot, chat_id, progress=progress)
         try:
             await indicator.start()
-            from .context import build_system_prompt, build_person_digest_prompt
+            from .context import build_system_prompt, build_hourly_scan_prompt
             system_prompt = build_system_prompt(c.briefing_path)
-            prompt = await build_person_digest_prompt(
-                c.watched_people,
-                since_iso=since_dt.isoformat(),
+            prompt = await build_hourly_scan_prompt(
                 since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
                 since_date=since_local.strftime("%Y-%m-%d"),
-                slack_channels=c.slack_channels,
             )
             response = await asyncio.wait_for(
                 self._agent.invoke(
                     prompt, system_prompt,
-                    trace_name="person-digest-manual",
+                    trace_name="hourly-scan-manual",
                     max_turns=c.briefing_max_turns,
                     progress=progress,
                 ),
@@ -713,7 +707,7 @@ class TelegramBot:
 
             await indicator.finalize(response.text)
             if advance and not response.is_error:
-                await self._store.set_meta(_DIGEST_WATERMARK_KEY, now.isoformat())
+                await self._store.set_meta(_SCAN_WATERMARK_KEY, now.isoformat())
         except asyncio.TimeoutError:
             await indicator.delete()
             await send_message(self._app.bot, chat_id, "Digest timed out.")
@@ -811,15 +805,15 @@ class TelegramBot:
 
     async def _cmd_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         c = self._config
-        digest_on = c.person_digest_enabled and c.watched_people
-        digest_display = (
-            f"hourly {c.person_digest_start}–{c.person_digest_end} Mon–Fri "
-            f"({len(c.watched_people)} people)"
-            if digest_on else "disabled"
+        scan_display = (
+            f"hourly on the hour ±{c.hourly_scan_jitter_seconds}s, "
+            f"{c.hourly_scan_start}–{c.hourly_scan_end} Mon–Fri "
+            "(mentions · Brock/Walter criticals · #red_alert_scout_ai · #eng-scout_errors)"
+            if c.hourly_scan_enabled else "disabled"
         )
         lines = [
             "<b>Schedule</b>",
-            f"Person digest: {digest_display}",
+            f"Hourly scan: {scan_display}",
             f"Legacy briefings: {'on' if c.briefings_enabled else 'off'}",
             f"Timezone: {c.timezone}",
             "",

@@ -19,10 +19,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Watermark: ISO-8601 UTC timestamp of the last digest we actually SENT.
+# Watermark: ISO-8601 UTC timestamp of the last scan alert we actually SENT.
 # We only report deltas since this point, and only advance it when we send —
 # so a quiet scan never skips activity and never produces a message.
-_DIGEST_WATERMARK_KEY = "person_digest_last_sent"
+_SCAN_WATERMARK_KEY = "hourly_scan_last_sent"
 
 
 async def _distill_job(distiller: Distiller, store: Store) -> None:
@@ -34,7 +34,7 @@ async def _distill_job(distiller: Distiller, store: Store) -> None:
         await store.log_diagnostic("distiller", "scheduled run failed", level="error")
 
 
-async def _person_digest_job(
+async def _hourly_scan_job(
     agent: Agent,
     bot: TelegramBot,
     store: Store,
@@ -42,44 +42,38 @@ async def _person_digest_job(
     config: Config,
     distiller: Distiller | None = None,
 ) -> None:
-    """Hourly per-person Slack digest — sends only when there is a delta."""
+    """Hourly Slack alert scan — sends only when something meets the criteria."""
     if bot.is_silenced:
-        logger.info("Person digest skipped — silenced")
-        return
-    if not config.watched_people:
-        logger.warning("Person digest skipped — no watched_people configured")
+        logger.info("Hourly scan skipped — silenced")
         return
 
     from datetime import UTC, datetime, timedelta
     from zoneinfo import ZoneInfo
 
     now = datetime.now(UTC)
-    last = await store.get_meta(_DIGEST_WATERMARK_KEY)
-    since_dt = now - timedelta(minutes=config.person_digest_interval_minutes)
+    last = await store.get_meta(_SCAN_WATERMARK_KEY)
+    since_dt = now - timedelta(minutes=config.hourly_scan_interval_minutes)
     if last:
         try:
             since_dt = datetime.fromisoformat(last)
         except ValueError:
-            logger.warning("Bad digest watermark %r — falling back to interval", last)
+            logger.warning("Bad scan watermark %r — falling back to interval", last)
 
     tz = ZoneInfo(config.timezone)
     since_local = since_dt.astimezone(tz)
 
     try:
-        from .context import build_system_prompt, build_person_digest_prompt
+        from .context import build_system_prompt, build_hourly_scan_prompt
         system_prompt = build_system_prompt(config.briefing_path)
-        prompt = await build_person_digest_prompt(
-            config.watched_people,
-            since_iso=since_dt.isoformat(),
+        prompt = await build_hourly_scan_prompt(
             since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
             since_date=since_local.strftime("%Y-%m-%d"),
-            slack_channels=config.slack_channels,
         )
 
         response = await asyncio.wait_for(
             agent.invoke(
                 prompt, system_prompt,
-                trace_name="person-digest",
+                trace_name="hourly-scan",
                 max_turns=config.briefing_max_turns,
             ),
             timeout=config.briefing_timeout,
@@ -89,28 +83,28 @@ async def _person_digest_job(
         text = response.text.strip()
 
         if response.is_error:
-            logger.warning("Person digest agent error: %s", text[:200])
-            await store.log_diagnostic("scheduler", "person_digest error", level="error")
+            logger.warning("Hourly scan agent error: %s", text[:200])
+            await store.log_diagnostic("scheduler", "hourly_scan error", level="error")
             return  # do not advance watermark — retry the same window next hour
 
         if not text or text == "NO_CHANGES":
-            logger.info("Person digest — no changes since %s", since_dt.isoformat())
+            logger.info("Hourly scan — no changes since %s", since_dt.isoformat())
             return  # stay silent; watermark unchanged so nothing gets skipped
 
         await bot.send_to_chat(config.chat_id, response.text)
-        await store.set_meta(_DIGEST_WATERMARK_KEY, now.isoformat())
+        await store.set_meta(_SCAN_WATERMARK_KEY, now.isoformat())
         await store.log_event(
-            source="scheduler", event_type="person_digest",
-            summary="hourly per-person Slack digest",
+            source="scheduler", event_type="hourly_scan",
+            summary="hourly Slack alert scan",
             content=response.text[:4000],
         )
 
     except asyncio.TimeoutError:
-        logger.warning("Person digest timed out")
-        await store.log_diagnostic("scheduler", "person_digest timeout", level="warning")
+        logger.warning("Hourly scan timed out")
+        await store.log_diagnostic("scheduler", "hourly_scan timeout", level="warning")
     except Exception:
-        logger.exception("Person digest failed")
-        await store.log_diagnostic("scheduler", "person_digest error", level="error")
+        logger.exception("Hourly scan failed")
+        await store.log_diagnostic("scheduler", "hourly_scan error", level="error")
 
     # Distill freshly logged events right away (no-op if nothing new)
     if distiller is not None:
@@ -328,26 +322,28 @@ class Scheduler:
                 id="evening_digest", replace_existing=True,
             )
 
-        # Hourly per-person Slack digest (delta-only), work hours, weekdays.
-        if c.person_digest_enabled and c.watched_people:
-            start_h = int(c.person_digest_start.split(":")[0])
-            end_h = int(c.person_digest_end.split(":")[0])
-            pd_interval = c.person_digest_interval_minutes
-            minute_expr = f"*/{pd_interval}" if 0 < pd_interval < 60 else "0"
+        # Hourly Slack alert scan (delta-only), on the hour with jitter,
+        # work hours, weekdays.
+        if c.hourly_scan_enabled:
+            start_h = int(c.hourly_scan_start.split(":")[0])
+            end_h = int(c.hourly_scan_end.split(":")[0])
+            scan_interval = c.hourly_scan_interval_minutes
+            minute_expr = f"*/{scan_interval}" if 0 < scan_interval < 60 else "0"
             self._scheduler.add_job(
-                _person_digest_job,
+                _hourly_scan_job,
                 CronTrigger(
                     minute=minute_expr,
                     hour=f"{start_h}-{end_h}",
                     day_of_week="mon-fri",
                     timezone=tz,
+                    jitter=c.hourly_scan_jitter_seconds,
                 ),
                 kwargs={**common, "distiller": self._distiller},
-                id="person_digest", replace_existing=True,
+                id="hourly_scan", replace_existing=True,
             )
             logger.info(
-                "Scheduled person digest: %s people, %02d:00-%02d:00 every %dm mon-fri",
-                len(c.watched_people), start_h, end_h, pd_interval,
+                "Scheduled hourly scan: %02d:00-%02d:00 every %dm (±%ds jitter) mon-fri",
+                start_h, end_h, scan_interval, c.hourly_scan_jitter_seconds,
             )
 
         # Monitoring poll (during work hours)
@@ -405,9 +401,9 @@ class Scheduler:
                 logger.info("Scheduled skill: %s (%s) — %s", skill_name, label, cron_expr)
 
         logger.info(
-            "Schedule: briefings=%s, person_digest=%s, monitoring=%s (%s-%s %s) weekdays_only=%s",
+            "Schedule: briefings=%s, hourly_scan=%s, monitoring=%s (%s-%s %s) weekdays_only=%s",
             "on" if c.briefings_enabled else "off",
-            "on" if (c.person_digest_enabled and c.watched_people) else "off",
+            "on" if c.hourly_scan_enabled else "off",
             f"every {interval}m" if interval > 0 else "disabled",
             c.work_hours_start, c.work_hours_end, tz, c.weekdays_only,
         )
