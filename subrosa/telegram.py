@@ -806,8 +806,7 @@ class TelegramBot:
     async def _cmd_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         c = self._config
         scan_display = (
-            f"hourly on the hour ±{c.hourly_scan_jitter_seconds}s, "
-            f"{c.hourly_scan_start}–{c.hourly_scan_end} Mon–Fri "
+            f"on the hour ±{c.hourly_scan_jitter_seconds}s, round the clock "
             "(mentions · Brock/Walter criticals · #red_alert_scout_ai · #eng-scout_errors)"
             if c.hourly_scan_enabled else "disabled"
         )

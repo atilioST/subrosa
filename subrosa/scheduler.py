@@ -323,18 +323,14 @@ class Scheduler:
             )
 
         # Hourly Slack alert scan (delta-only), on the hour with jitter,
-        # work hours, weekdays.
+        # round the clock every day — it only notifies when something matches.
         if c.hourly_scan_enabled:
-            start_h = int(c.hourly_scan_start.split(":")[0])
-            end_h = int(c.hourly_scan_end.split(":")[0])
             scan_interval = c.hourly_scan_interval_minutes
             minute_expr = f"*/{scan_interval}" if 0 < scan_interval < 60 else "0"
             self._scheduler.add_job(
                 _hourly_scan_job,
                 CronTrigger(
                     minute=minute_expr,
-                    hour=f"{start_h}-{end_h}",
-                    day_of_week="mon-fri",
                     timezone=tz,
                     jitter=c.hourly_scan_jitter_seconds,
                 ),
@@ -342,8 +338,8 @@ class Scheduler:
                 id="hourly_scan", replace_existing=True,
             )
             logger.info(
-                "Scheduled hourly scan: %02d:00-%02d:00 every %dm (±%ds jitter) mon-fri",
-                start_h, end_h, scan_interval, c.hourly_scan_jitter_seconds,
+                "Scheduled hourly scan: round the clock every %dm (±%ds jitter)",
+                scan_interval, c.hourly_scan_jitter_seconds,
             )
 
         # Monitoring poll (during work hours)

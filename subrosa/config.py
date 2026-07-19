@@ -57,12 +57,11 @@ class Config:
     weekdays_only: bool = False
 
     # Hourly Slack alert scan (delta-only): mentions, key-people criticals,
-    # red-alert channel, error assessment. interval_minutes also sets the
+    # red-alert channel, error assessment. Runs round the clock — it only
+    # notifies when something matches. interval_minutes also sets the
     # fallback look-back window when no watermark exists yet.
     hourly_scan_enabled: bool = True
     hourly_scan_interval_minutes: int = 60
-    hourly_scan_start: str = "08:00"
-    hourly_scan_end: str = "18:00"
     hourly_scan_jitter_seconds: int = 120
 
     # Monitoring scope
@@ -158,8 +157,6 @@ def load_config(path: Path | None = None) -> Config:
         weekdays_only=sched.get("weekdays_only", False),
         hourly_scan_enabled=hourly_scan.get("enabled", True),
         hourly_scan_interval_minutes=hourly_scan.get("interval_minutes", 60),
-        hourly_scan_start=hourly_scan.get("start", "08:00"),
-        hourly_scan_end=hourly_scan.get("end", "18:00"),
         hourly_scan_jitter_seconds=hourly_scan.get("jitter_seconds", 120),
         slack_channels=mon.get("slack_channels", []),
         jira_projects=mon.get("jira_projects", []),
