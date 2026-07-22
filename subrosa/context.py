@@ -703,7 +703,11 @@ async def build_hourly_scan_prompt(
         f" `in:eng-scout_errors after:{after_date}`. If there are new posts,"
         " give a short assessment: what errors occurred, new vs recurring,"
         " apparent severity and customer impact, and whether anything needs"
-        " action. If there are no new posts, omit this section entirely.",
+        " action. Bot alerts in this channel carry the error details in the"
+        " message's `attachments`/`blocks_text` fields (title, error message,"
+        " culprit) — always name the actual error from there. Never describe"
+        " a message as 'automated alert' or say the content is in an"
+        " attachment. If there are no new posts, omit this section entirely.",
         "",
         "## OUTPUT RULES",
         "",
