@@ -37,7 +37,8 @@ class Config:
     chat_id: int = 0
 
     # Agent
-    model: str = "sonnet"
+    model: str = "sonnet"  # interactive: questions asked over Telegram / CLI
+    scheduled_model: str = "sonnet"  # timed jobs: hourly scan, briefings, skills, monitoring
     max_turns: int = 10
     briefing_max_turns: int = 25
     agent_timeout: int = 300  # soft deadline: notify the user, keep working
@@ -140,6 +141,7 @@ def load_config(path: Path | None = None) -> Config:
         bot_token=tg.get("bot_token", ""),
         chat_id=allowed[0] if allowed else 0,
         model=ag.get("model", "sonnet"),
+        scheduled_model=ag.get("scheduled_model", ag.get("model", "sonnet")),
         max_turns=ag.get("max_turns", 10),
         briefing_max_turns=ag.get("briefing_max_turns", 25),
         agent_timeout=ag.get("agent_timeout", 300),

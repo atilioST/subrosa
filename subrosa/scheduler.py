@@ -86,6 +86,7 @@ async def _hourly_scan_job(
         prompt = await build_hourly_scan_prompt(
             since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
             since_date=since_local.strftime("%Y-%m-%d"),
+            lookback_minutes=int((now - since_dt).total_seconds() // 60),
         )
 
         response = await asyncio.wait_for(
@@ -93,6 +94,7 @@ async def _hourly_scan_job(
                 prompt, system_prompt,
                 trace_name="hourly-scan",
                 max_turns=config.briefing_max_turns,
+                model=config.scheduled_model,
             ),
             timeout=config.briefing_timeout,
         )
@@ -152,6 +154,7 @@ async def _briefing_job(
                 prompt, system_prompt,
                 trace_name=f"briefing-{kind}",
                 max_turns=config.briefing_max_turns,
+                model=config.scheduled_model,
             ),
             timeout=config.briefing_timeout,
         )
@@ -203,7 +206,11 @@ async def _skill_job(
         system_prompt = build_system_prompt(config.briefing_path)
 
         response = await asyncio.wait_for(
-            agent.invoke(skill.instruction, system_prompt, trace_name=f"skill-{skill_name}"),
+            agent.invoke(
+                skill.instruction, system_prompt,
+                trace_name=f"skill-{skill_name}",
+                model=config.scheduled_model,
+            ),
             timeout=config.briefing_timeout,
         )
         health.record_agent()
@@ -250,7 +257,11 @@ async def _monitoring_job(
         )
 
         response = await asyncio.wait_for(
-            agent.invoke(prompt, system_prompt, trace_name="monitoring"),
+            agent.invoke(
+                prompt, system_prompt,
+                trace_name="monitoring",
+                model=config.scheduled_model,
+            ),
             timeout=config.monitoring_timeout,
         )
         health.record_agent()

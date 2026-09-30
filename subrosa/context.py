@@ -652,17 +652,25 @@ async def build_monitoring_prompt(
     return result
 
 
+# Atilio's identities for mention detection. Slack search does NOT match a
+# plain-text "@atilio" (his handle is ajobson) — search the user-ID mention form.
+_SLACK_USER_ID = "U06C0AXSZ45"
+_SLACK_HANDLE = "ajobson"
+_JIRA_ACCOUNT_ID = "712020:f7c4a338-b0a9-49ed-b319-92042a637410"
+
+
 async def build_hourly_scan_prompt(
     since_human: str,
     since_date: str,
+    lookback_minutes: int = 60,
 ) -> str:
     """Build prompt for the hourly alert scan (delta-only).
 
-    Checks four things since the cutoff: @atilio mentions anywhere, critical
-    posts from Brock or Walter, any activity in #red_alert_scout_ai, and an
-    assessment of new errors in #eng-scout_errors. Emits the exact sentinel
-    ``NO_CHANGES`` when nothing meets the criteria so the scheduler stays
-    silent.
+    Checks since the cutoff: UNREAD Slack @-mentions and DMs, Jira @-mentions,
+    Brock posts that need a response or show anger, any activity in
+    #red_alert_scout_ai, and an assessment of new errors in #eng-scout_errors.
+    Emits the exact sentinel ``NO_CHANGES`` when nothing meets the criteria so
+    the scheduler stays silent.
     """
     # Slack's `after:` modifier is EXCLUSIVE of the date given (after:2026-07-01
     # returns 2026-07-02 onward). To include the cutoff day itself, search from
@@ -674,32 +682,59 @@ async def build_hourly_scan_prompt(
     except ValueError:
         after_date = since_date
 
+    # Jira JQL relative window, padded so the cutoff is always covered; the
+    # precise filter is on each comment's `created` timestamp.
+    jira_window = f"-{max(lookback_minutes, 1) + 15}m"
+
     parts = [
-        "Hourly Slack alert scan. Report ONLY what is NEW since the last scan"
-        " and meets the criteria below. This is an alert channel, not a digest —"
-        " when in doubt about routine chatter, leave it out.",
+        "Hourly alert scan (Slack + Jira). Report ONLY what is NEW since the"
+        " last scan and meets the criteria below. This is an alert channel, not"
+        " a digest — when in doubt, leave it out.",
         "",
-        f"**Cutoff:** only include messages posted at or after {since_human}.",
-        f"Search with `after:{after_date}` (one day BEFORE the cutoff — Slack's"
-        f" `after:` is date-granular AND excludes the given day, so this is the"
-        f" correct way to capture cutoff-day messages). Then DISCARD any message"
-        f" whose actual timestamp is before {since_human}. Do NOT change the"
-        f" `after:` date to the cutoff date — that would drop today's messages.",
+        f"**Cutoff:** only include messages/comments posted at or after {since_human}.",
+        f"Slack: search with `after:{after_date}` (one day BEFORE the cutoff —"
+        f" Slack's `after:` is date-granular AND excludes the given day, so this"
+        f" is the correct way to capture cutoff-day messages). Then DISCARD any"
+        f" message whose actual timestamp is before {since_human}. Do NOT change"
+        f" the `after:` date to the cutoff date — that would drop today's messages.",
         "",
         "## WHAT TO CHECK",
         "",
-        "1. **@atilio mentions — any channel** — `slack_search_messages` query"
-        f" `@atilio after:{after_date}`. Report EVERY new mention of Atilio,"
-        " wherever it appears.",
-        "2. **Critical posts from Brock or Walter** — search"
-        f" `from:@mbrocklehurst after:{after_date}` and"
-        f" `from:@wthorn after:{after_date}`. Report ONLY critical items:"
-        " directives, escalations, incidents, decisions, blockers, or direct"
-        " asks. Skip routine chatter, acknowledgements, and casual replies.",
-        "3. **#red_alert_scout_ai — any activity** — search"
+        "1. **Unread Slack @-mentions and DMs** — Atilio is Slack user"
+        f" `{_SLACK_USER_ID}` (handle `{_SLACK_HANDLE}`).",
+        f"   - Mentions: `slack_search_messages` query `<@{_SLACK_USER_ID}> after:{after_date}`.",
+        f"   - DMs / group DMs: query `to:me after:{after_date}`. Discard messages"
+        f" sent by Atilio himself and bot/app/workflow messages.",
+        "   - **Unread filter:** for each remaining message, call"
+        " `slack_get_channel_info` (arg `channel` = the channel id; once per channel) and read"
+        " `last_read`. The message is UNREAD only if its `ts` is greater than"
+        " `last_read` (compare as numbers). Drop read messages. Also drop a"
+        " mention if Atilio has already replied after it in the same thread or"
+        " conversation. (Slack exposes no per-thread read state — use the"
+        " channel's `last_read` for thread replies too.)",
+        "   - Report every unread mention/DM that survives: who, where, and a"
+        " one-line gist of what they want.",
+        "2. **Jira @-mentions** — `jira_search` with JQL"
+        f" `comment ~ \"{_JIRA_ACCOUNT_ID}\" AND updated >= {jira_window} ORDER BY updated DESC`"
+        " and fields `key,summary,updated`. For each hit, `jira_get_issue` and"
+        f" find comments containing `[~accountid:{_JIRA_ACCOUNT_ID}]` whose"
+        f" `created` is at or after {since_human} and whose author is not"
+        " Atilio. Report the issue key, who mentioned him, and what they want."
+        " If the Jira tools are unavailable or fail, add one line saying the"
+        " Jira check could not run — do not silently skip it.",
+        "3. **Brock — only if he needs a response or is angry** — search"
+        f" `from:@mbrocklehurst after:{after_date}` (do NOT monitor anyone else"
+        " this way). Report a Brock message ONLY if (a) it asks for or clearly"
+        " expects a response/action from Atilio or his team — a direct question,"
+        " a request, a deadline, a decision he's waiting on — and Atilio has not"
+        " already replied; or (b) it signals frustration, anger, or"
+        " disappointment (sharp tone, escalation, 'why is this still…', public"
+        " call-outs). Skip everything else, however important it sounds. Flag"
+        " tone explicitly when (b) applies.",
+        "4. **#red_alert_scout_ai — any activity** — search"
         f" `in:red_alert_scout_ai after:{after_date}`. ANYTHING posted in this"
         " channel since the cutoff gets reported.",
-        "4. **#eng-scout_errors — error assessment** — search"
+        "5. **#eng-scout_errors — error assessment** — search"
         f" `in:eng-scout_errors after:{after_date}`. If there are new posts,"
         " give a short assessment: what errors occurred, new vs recurring,"
         " apparent severity and customer impact, and whether anything needs"
@@ -711,17 +746,17 @@ async def build_hourly_scan_prompt(
         "",
         "## OUTPUT RULES",
         "",
-        "- Put @atilio mentions and #red_alert_scout_ai activity FIRST under a"
-        " `‼️ Needs attention` heading, then Brock/Walter critical items, then"
-        " the error assessment.",
+        "- Under a `‼️ Needs attention` heading put, in order: unread Slack"
+        " mentions/DMs, Jira mentions, Brock items, #red_alert_scout_ai"
+        " activity. Then the error assessment.",
         "- OMIT any section with nothing to report — no 'no activity' lines.",
-        "- 1–3 concise bullets per section. Include channel names and who said it.",
+        "- 1–3 concise bullets per item. Include channel/issue and who said it.",
         "- Keep it tight and mobile-friendly. No preamble, no pleasantries.",
         "- NEVER mention sprints — Scout uses Kanban.",
         "",
         "## CRITICAL — DELTA SUPPRESSION",
         "",
-        "If nothing since the cutoff meets ANY of the four criteria, respond with"
+        "If nothing since the cutoff meets ANY of the criteria, respond with"
         " exactly: NO_CHANGES",
         "(nothing else — no explanation).",
     ]

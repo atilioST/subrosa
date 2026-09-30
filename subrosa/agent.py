@@ -138,14 +138,17 @@ class Agent:
         trace_tags: list[str] | None = None,
         max_turns: int | None = None,
         progress: InvocationProgress | None = None,
+        model: str | None = None,
     ) -> AgentResponse:
         """Invoke Claude. Never raises (except CancelledError) — returns
         AgentResponse with is_error on failure. Auto-continues when the CLI
-        stops on the turn cap mid-task."""
+        stops on the turn cap mid-task. `model` overrides self.model for this
+        call (scheduled jobs run a cheaper model than interactive questions)."""
+        model = model or self.model
         try:
             response = await self._do_invoke(
                 prompt, system_prompt, resume_session, trace_name, trace_tags,
-                max_turns, progress,
+                max_turns, progress, model,
             )
         except Exception:
             if resume_session:
@@ -153,7 +156,7 @@ class Agent:
                 try:
                     response = await self._do_invoke(
                         prompt, system_prompt, None, trace_name, trace_tags,
-                        max_turns, progress,
+                        max_turns, progress, model,
                     )
                 except Exception:
                     logger.exception("Agent invocation failed (one-shot retry)")
@@ -174,7 +177,7 @@ class Agent:
                 continued = await self._do_invoke(
                     "You stopped at the turn limit mid-task. Continue and finish the task.",
                     system_prompt, response.session_id, trace_name, trace_tags,
-                    max_turns, progress,
+                    max_turns, progress, model,
                 )
             except Exception:
                 logger.exception("Continuation failed — returning partial result")
@@ -192,14 +195,47 @@ class Agent:
         trace_tags: list[str] | None,
         max_turns: int | None = None,
         progress: InvocationProgress | None = None,
+        model: str | None = None,
     ) -> AgentResponse:
+        model = model or self.model
+        try:
+            return await self._run_query(
+                prompt, system_prompt, resume_session, trace_name, trace_tags,
+                max_turns, progress, model,
+            )
+        except _UnrecognizedModel:
+            # A full model id (claude-opus-5-5) is rejected by a CLI older than
+            # the model — seen right after a release, before the CLI updated.
+            # The family alias always resolves on any CLI version.
+            alias = _model_alias(model)
+            if alias == model:
+                raise
+            logger.warning("CLI does not know %s — retrying with alias %r", model, alias)
+            return await self._run_query(
+                prompt, system_prompt, resume_session, trace_name, trace_tags,
+                max_turns, progress, alias,
+            )
+
+    async def _run_query(
+        self,
+        prompt: str,
+        system_prompt: str,
+        resume_session: str | None,
+        trace_name: str,
+        trace_tags: list[str] | None,
+        max_turns: int | None,
+        progress: InvocationProgress | None,
+        model: str,
+    ) -> AgentResponse:
+        stderr_lines: list[str] = []
         options = ClaudeAgentOptions(
-            model=self.model,
+            model=model,
             max_turns=max_turns or self.max_turns,
             system_prompt=system_prompt,
             permission_mode="bypassPermissions",
             cli_path=CLI_PATH,
             setting_sources=["user"],
+            stderr=stderr_lines.append,
         )
 
         if resume_session:
@@ -207,34 +243,41 @@ class Agent:
 
         mode = "resume" if resume_session else "one-shot"
         preview = prompt.replace("\n", " ")[:120]
-        logger.info("→ Agent (%s): %s", mode, preview)
+        logger.info("→ Agent (%s, %s): %s", mode, model, preview)
 
         text_parts: list[str] = []
         tools_used: list[str] = []
         result: ResultMessage | None = None
         rate_limited = False
 
-        async for message in query(prompt=prompt, options=options):
-            if message is None:
-                continue
-            if isinstance(message, RateLimitEvent):
-                rate_limited = True
-                continue
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        text_parts.append(block.text)
-                        if progress:
-                            progress.note_text(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        tools_used.append(block.name)
-                        if progress:
-                            progress.note_tool(block.name, block.input)
-                        # Log tool name + input for debugging
-                        input_preview = str(block.input)[:200]
-                        logger.info("  tool: %s → %s", block.name, input_preview)
-            elif isinstance(message, ResultMessage):
-                result = message
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if message is None:
+                    continue
+                if isinstance(message, RateLimitEvent):
+                    rate_limited = True
+                    continue
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        if isinstance(block, TextBlock):
+                            text_parts.append(block.text)
+                            if progress:
+                                progress.note_text(block.text)
+                        elif isinstance(block, ToolUseBlock):
+                            tools_used.append(block.name)
+                            if progress:
+                                progress.note_tool(block.name, block.input)
+                            # Log tool name + input for debugging
+                            input_preview = str(block.input)[:200]
+                            logger.info("  tool: %s → %s", block.name, input_preview)
+                elif isinstance(message, ResultMessage):
+                    result = message
+        except Exception:
+            if stderr_lines:
+                logger.warning("CLI stderr:\n%s", "\n".join(stderr_lines[-20:]))
+            if any("unrecognized_model" in line for line in stderr_lines):
+                raise _UnrecognizedModel(model)
+            raise
 
         full_text = "\n".join(text_parts) if text_parts else ""
 
@@ -258,7 +301,7 @@ class Agent:
             name=trace_name or "agent-invocation",
             input_prompt=prompt,
             output_text=response_text,
-            model=self.model,
+            model=model,
             total_cost_usd=result.total_cost_usd,
             usage=result.usage,
             duration_ms=result.duration_ms,
@@ -287,6 +330,18 @@ class Agent:
             narration=full_text,
             subtype=result.subtype,
         )
+
+
+class _UnrecognizedModel(Exception):
+    """The Claude CLI rejected the model id (it predates that model)."""
+
+
+def _model_alias(model: str) -> str:
+    """claude-opus-5-5 → opus, claude-sonnet-5-5 → sonnet; aliases unchanged."""
+    for family in ("opus", "sonnet", "haiku"):
+        if model.startswith(f"claude-{family}-"):
+            return family
+    return model
 
 
 def _merge_responses(prior: AgentResponse, continued: AgentResponse) -> AgentResponse:

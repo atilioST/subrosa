@@ -118,3 +118,46 @@ async def test_invoke_stops_continuing_at_limit(monkeypatch):
     assert len(calls) == 3  # initial + 2 continuations
     assert response.subtype == "error_max_turns"
     assert response.text == "chunk1\nchunk2\nchunk3"
+
+
+def test_model_alias():
+    from subrosa.agent import _model_alias
+
+    assert _model_alias("claude-opus-5-5") == "opus"
+    assert _model_alias("claude-sonnet-5-5") == "sonnet"
+    assert _model_alias("sonnet") == "sonnet"
+
+
+async def test_invoke_model_override(monkeypatch):
+    from subrosa.agent import Agent
+
+    seen = []
+
+    async def fake_run_query(self, *args):
+        seen.append(args[-1])
+        return AgentResponse(text="ok", subtype="success")
+
+    monkeypatch.setattr(Agent, "_run_query", fake_run_query)
+    agent = Agent(model="claude-opus-5-5")
+    await agent.invoke("q", "system")
+    await agent.invoke("scan", "system", model="claude-sonnet-5-5")
+
+    assert seen == ["claude-opus-5-5", "claude-sonnet-5-5"]
+
+
+async def test_unrecognized_model_falls_back_to_alias(monkeypatch):
+    from subrosa.agent import Agent, _UnrecognizedModel
+
+    seen = []
+
+    async def fake_run_query(self, *args):
+        seen.append(args[-1])
+        if args[-1].startswith("claude-"):
+            raise _UnrecognizedModel(args[-1])
+        return AgentResponse(text="ok", subtype="success")
+
+    monkeypatch.setattr(Agent, "_run_query", fake_run_query)
+    response = await Agent(model="claude-opus-5-5").invoke("q", "system")
+
+    assert seen == ["claude-opus-5-5", "opus"]
+    assert response.text == "ok"

@@ -688,6 +688,7 @@ class TelegramBot:
             prompt = await build_hourly_scan_prompt(
                 since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
                 since_date=since_local.strftime("%Y-%m-%d"),
+                lookback_minutes=int((now - since_dt).total_seconds() // 60),
             )
             response = await asyncio.wait_for(
                 self._agent.invoke(
@@ -695,6 +696,7 @@ class TelegramBot:
                     trace_name="hourly-scan-manual",
                     max_turns=c.briefing_max_turns,
                     progress=progress,
+                    model=c.scheduled_model,
                 ),
                 timeout=c.briefing_timeout,
             )

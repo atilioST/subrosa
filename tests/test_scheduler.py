@@ -33,3 +33,20 @@ def test_suppressed(text):
 def test_sent(text):
     assert is_no_changes(text) is False
 
+
+async def test_hourly_scan_prompt_scope():
+    from subrosa.context import build_hourly_scan_prompt
+
+    prompt = await build_hourly_scan_prompt(
+        since_human="2026-09-29 21:00 MDT", since_date="2026-09-29",
+        lookback_minutes=60,
+    )
+    # Brock only — Walter is no longer monitored.
+    assert "from:@mbrocklehurst" in prompt
+    assert "wthorn" not in prompt
+    # Mentions use the user-id form (plain "@atilio" matches nothing) + unread check.
+    assert "<@U06C0AXSZ45>" in prompt
+    assert "last_read" in prompt
+    # Jira mentions, padded relative window.
+    assert "updated >= -75m" in prompt
+    assert "[~accountid:" in prompt

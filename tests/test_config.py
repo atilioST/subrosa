@@ -56,6 +56,7 @@ level = "DEBUG"
     assert config.bot_token == "test-token-123"
     assert config.chat_id == 12345
     assert config.model == "sonnet"
+    assert config.scheduled_model == "sonnet"  # falls back to [agent] model
     assert config.max_turns == 5
     assert config.agent_timeout == 120
     assert config.morning_briefing == "08:00"
