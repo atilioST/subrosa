@@ -24,6 +24,24 @@ logger = logging.getLogger(__name__)
 # so a quiet scan never skips activity and never produces a message.
 _SCAN_WATERMARK_KEY = "hourly_scan_last_sent"
 
+# Sentinel the scan returns when nothing meets the alert criteria.
+_NO_CHANGES = "NO_CHANGES"
+
+
+def is_no_changes(text: str) -> bool:
+    """True when a scan response signals "nothing to report".
+
+    The prompt asks for the bare sentinel, but the model sometimes prefixes a
+    line of reasoning ("All matches predate the cutoff.\n\nNO_CHANGES"). Strict
+    equality treated that narration as a real alert and paged the user. Match on
+    the last non-empty line instead: tolerant of a preamble, but a report that
+    merely mentions the token mid-body still sends.
+    """
+    if not text or not text.strip():
+        return True
+    last_line = text.strip().splitlines()[-1].strip().strip("*_`.")
+    return last_line.upper() == _NO_CHANGES
+
 
 async def _distill_job(distiller: Distiller, store: Store) -> None:
     """Scheduled distillation — drain new events into the knowledge table."""
@@ -87,7 +105,7 @@ async def _hourly_scan_job(
             await store.log_diagnostic("scheduler", "hourly_scan error", level="error")
             return  # do not advance watermark — retry the same window next hour
 
-        if not text or text == "NO_CHANGES":
+        if is_no_changes(text):
             logger.info("Hourly scan — no changes since %s", since_dt.isoformat())
             return  # stay silent; watermark unchanged so nothing gets skipped
 

@@ -1,0 +1,8 @@
+[Unit]
+Description=Subrosa Claude auth watchdog probe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/ati/Dev/subrosa/scripts/auth_watchdog.sh

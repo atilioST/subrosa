@@ -654,7 +654,7 @@ class TelegramBot:
         chat_id = update.effective_chat.id
         c = self._config
 
-        from .scheduler import _SCAN_WATERMARK_KEY
+        from .scheduler import _SCAN_WATERMARK_KEY, is_no_changes
 
         now = datetime.now(UTC)
         hours_arg = None
@@ -701,7 +701,7 @@ class TelegramBot:
             self._health.record_agent()
 
             text = response.text.strip()
-            if not response.is_error and (not text or text == "NO_CHANGES"):
+            if not response.is_error and is_no_changes(text):
                 await indicator.finalize(f"Nothing new since {since_local:%H:%M %Z}.")
                 return
 
