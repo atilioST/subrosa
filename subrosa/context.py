@@ -751,6 +751,13 @@ async def build_hourly_scan_prompt(
         " activity. Then the error assessment.",
         "- OMIT any section with nothing to report — no 'no activity' lines.",
         "- 1–3 concise bullets per item. Include channel/issue and who said it.",
+        "- **People by name, never by ID.** Slack message text encodes"
+        " mentions as `<@U…>` and search results may give only a user id or"
+        " handle. Before writing the report, resolve every such id with"
+        " `slack_get_user_info` (arg `user`) and write the person's"
+        " `real_name` (e.g. `Ravi Sankar`, not `U0BEU8W7Z6X` or `ravi.s`)."
+        " Never output a raw `U…` id or a bare handle. If a lookup fails, say"
+        " `unknown user`.",
         "- Keep it tight and mobile-friendly. No preamble, no pleasantries.",
         "- NEVER mention sprints — Scout uses Kanban.",
         "",

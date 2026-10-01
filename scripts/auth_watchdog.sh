@@ -28,7 +28,9 @@ send_telegram() {
         echo "watchdog: Telegram send FAILED: ${resp:0:300}" >&2
         return 1
     fi
-    echo "watchdog: alert sent"
+    local msg_id
+    msg_id=$(printf '%s' "$resp" | grep -o '"message_id":[0-9]*' | head -1 | cut -d: -f2)
+    echo "watchdog: alert sent (telegram message_id=${msg_id:-?})"
 }
 
 # Cheap probe: one haiku turn, same invocation style as the agent SDK uses.
