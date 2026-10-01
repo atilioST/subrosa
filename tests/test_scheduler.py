@@ -50,3 +50,8 @@ async def test_hourly_scan_prompt_scope():
     # Jira mentions, padded relative window.
     assert "updated >= -75m" in prompt
     assert "[~accountid:" in prompt
+    # Header is reserved for timing-sensitive asks and Brock DMs.
+    assert "ONLY for" in prompt
+    assert "ANY DM from Brock" in prompt
+    assert "NO header" in prompt
+    assert "NO_CHANGES" in prompt

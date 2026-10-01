@@ -729,7 +729,8 @@ async def build_hourly_scan_prompt(
         " a request, a deadline, a decision he's waiting on — and Atilio has not"
         " already replied; or (b) it signals frustration, anger, or"
         " disappointment (sharp tone, escalation, 'why is this still…', public"
-        " call-outs). Skip everything else, however important it sounds. Flag"
+        " call-outs). Skip everything else, however important it sounds (any DM from"
+        " Brock is always reported via item 1). Flag"
         " tone explicitly when (b) applies.",
         "4. **#red_alert_scout_ai — any activity** — search"
         f" `in:red_alert_scout_ai after:{after_date}`. ANYTHING posted in this"
@@ -746,9 +747,17 @@ async def build_hourly_scan_prompt(
         "",
         "## OUTPUT RULES",
         "",
-        "- Under a `‼️ Needs attention` heading put, in order: unread Slack"
-        " mentions/DMs, Jira mentions, Brock items, #red_alert_scout_ai"
-        " activity. Then the error assessment.",
+        "- Default: report findings as a plain, concise summary with NO header."
+        " Ordinary mentions/DMs/Jira mentions, acknowledgments, FYIs and"
+        " #red_alert_scout_ai activity are just summarized.",
+        "- Use a `‼️ Needs attention` heading ONLY for: (a) a direct ask of"
+        " Atilio with timing implications — a deadline, 'today', 'before the"
+        " release/deploy', or someone blocked waiting on him; (b) ANY DM from"
+        " Brock (@mbrocklehurst), always. Brock's channel posts that need a"
+        " response or show anger are still reported, but get the header only if"
+        " they also meet (a). Acknowledgments and FYIs with no ask are not (a).",
+        "- Order: Needs-attention items first, then the plain summary items,"
+        " then the error assessment. Omit the header if it has no items.",
         "- OMIT any section with nothing to report — no 'no activity' lines.",
         "- 1–3 concise bullets per item. Include channel/issue and who said it.",
         "- **People by name, never by ID.** Slack message text encodes"
