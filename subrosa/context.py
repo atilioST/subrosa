@@ -750,11 +750,8 @@ async def build_hourly_scan_prompt(
         "- Default: report findings as a plain, concise summary with NO header."
         " Ordinary mentions/DMs/Jira mentions, acknowledgments, FYIs and"
         " #red_alert_scout_ai activity are just summarized.",
-        "- Use a `‼️ Needs attention` heading ONLY for: (a) a direct ask of"
-        " Atilio with timing implications — a deadline, 'today', 'before the"
-        " release/deploy', someone blocked waiting on him, or an ask tied to an"
-        " upcoming change, decision, renewal or migration ('keep or remove seats"
-        " ahead of a tool migration', 'before we renew'); (b) ANY DM from"
+        "- Use a `‼️ Needs attention` heading ONLY for: (a) any direct ask of"
+        " Atilio — a question or request directed at him; (b) ANY DM from"
         " Brock (@mbrocklehurst), always. Brock's channel posts that need a"
         " response or show anger are still reported, but get the header only if"
         " they also meet (a). An acknowledgment or FYI with no ask (e.g. 'will"
