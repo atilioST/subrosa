@@ -150,7 +150,7 @@ class Agent:
                 prompt, system_prompt, resume_session, trace_name, trace_tags,
                 max_turns, progress, model,
             )
-        except Exception:
+        except Exception as e:
             if resume_session:
                 logger.warning("Resume failed, retrying as one-shot")
                 try:
@@ -158,12 +158,12 @@ class Agent:
                         prompt, system_prompt, None, trace_name, trace_tags,
                         max_turns, progress, model,
                     )
-                except Exception:
+                except Exception as e:
                     logger.exception("Agent invocation failed (one-shot retry)")
-                    return AgentResponse(text="Agent error — please try again.", is_error=True)
+                    return AgentResponse(text=_error_text(e), is_error=True)
             else:
                 logger.exception("Agent invocation failed")
-                return AgentResponse(text="Agent error — please try again.", is_error=True)
+                return AgentResponse(text=_error_text(e), is_error=True)
 
         for i in range(self.max_continuations):
             if response.subtype != "error_max_turns" or not response.session_id:
@@ -249,6 +249,7 @@ class Agent:
         tools_used: list[str] = []
         result: ResultMessage | None = None
         rate_limited = False
+        api_error: str | None = None
 
         try:
             async for message in query(prompt=prompt, options=options):
@@ -258,6 +259,8 @@ class Agent:
                     rate_limited = True
                     continue
                 if isinstance(message, AssistantMessage):
+                    if message.error:
+                        api_error = message.error
                     for block in message.content:
                         if isinstance(block, TextBlock):
                             text_parts.append(block.text)
@@ -272,11 +275,16 @@ class Agent:
                             logger.info("  tool: %s → %s", block.name, input_preview)
                 elif isinstance(message, ResultMessage):
                     result = message
-        except Exception:
+        except Exception as e:
             if stderr_lines:
                 logger.warning("CLI stderr:\n%s", "\n".join(stderr_lines[-20:]))
             if any("unrecognized_model" in line for line in stderr_lines):
-                raise _UnrecognizedModel(model)
+                raise _UnrecognizedModel(model) from e
+            # The CLI reports API failures (expired login, billing, …) as a
+            # final assistant message, then exits 1 — the SDK only surfaces
+            # "exit code 1". Re-raise with the CLI's own explanation.
+            if api_error:
+                raise CLIError(api_error, "\n".join(text_parts).strip()) from e
             raise
 
         full_text = "\n".join(text_parts) if text_parts else ""
@@ -330,6 +338,27 @@ class Agent:
             narration=full_text,
             subtype=result.subtype,
         )
+
+
+class CLIError(Exception):
+    """The CLI reported an API error (e.g. authentication_failed) and exited."""
+
+    def __init__(self, kind: str, detail: str):
+        self.kind = kind
+        self.detail = detail
+        super().__init__(f"{kind}: {detail}" if detail else kind)
+
+
+def _error_text(exc: BaseException) -> str:
+    """User-facing text for a failed invocation."""
+    if isinstance(exc, CLIError):
+        if exc.kind == "authentication_failed":
+            return (
+                "Claude login has expired — run `claude /login` on SubrosaBox."
+                f"\n({exc.detail or exc.kind})"
+            )
+        return f"Agent error ({exc}) — please try again."
+    return "Agent error — please try again."
 
 
 class _UnrecognizedModel(Exception):

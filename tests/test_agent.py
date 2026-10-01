@@ -161,3 +161,15 @@ async def test_unrecognized_model_falls_back_to_alias(monkeypatch):
 
     assert seen == ["claude-opus-5-5", "opus"]
     assert response.text == "ok"
+
+
+def test_error_text_names_expired_login():
+    from subrosa.agent import CLIError, _error_text
+
+    text = _error_text(CLIError(
+        "authentication_failed",
+        "Failed to authenticate: OAuth session expired and could not be refreshed",
+    ))
+    assert "claude /login" in text
+    assert "OAuth session expired" in text
+    assert _error_text(RuntimeError("boom")) == "Agent error — please try again."
