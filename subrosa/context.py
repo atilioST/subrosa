@@ -752,10 +752,13 @@ async def build_hourly_scan_prompt(
         " #red_alert_scout_ai activity are just summarized.",
         "- Use a `‼️ Needs attention` heading ONLY for: (a) a direct ask of"
         " Atilio with timing implications — a deadline, 'today', 'before the"
-        " release/deploy', or someone blocked waiting on him; (b) ANY DM from"
+        " release/deploy', someone blocked waiting on him, or an ask tied to an"
+        " upcoming change, decision, renewal or migration ('keep or remove seats"
+        " ahead of a tool migration', 'before we renew'); (b) ANY DM from"
         " Brock (@mbrocklehurst), always. Brock's channel posts that need a"
         " response or show anger are still reported, but get the header only if"
-        " they also meet (a). Acknowledgments and FYIs with no ask are not (a).",
+        " they also meet (a). An acknowledgment or FYI with no ask (e.g. 'will"
+        " put it on the roadmap') is not (a): summarize, no header.",
         "- Order: Needs-attention items first, then the plain summary items,"
         " then the error assessment. Omit the header if it has no items.",
         "- OMIT any section with nothing to report — no 'no activity' lines.",
