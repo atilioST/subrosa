@@ -707,14 +707,21 @@ def build_hourly_scan_prompt(
         " who, where, and a one-line gist of what they want.",
         "- **Jira @-mention** — always report: issue key, who mentioned him,"
         " and what they want.",
-        "- **Brock channel post** — report ONLY if (a) it asks for or clearly"
-        " expects a response/action from Atilio or his team — a direct question,"
-        " a request, a deadline, a decision he's waiting on — and the note says"
-        " Atilio has not replied; or (b) it signals frustration, anger, or"
-        " disappointment (sharp tone, escalation, 'why is this still…', public"
-        " call-outs). Skip everything else, however important it sounds. Flag"
-        " tone explicitly when (b) applies. Consecutive short posts in the same"
-        " channel are one conversation — judge them together.",
+        "- **Brock channel post** — report ONLY if one of these is true:"
+        " (i) it is a direct question or request addressed to Atilio or his"
+        " team (a request, a deadline, a decision he's waiting on) and the"
+        " note says Atilio has not replied; or (ii) it clearly signals"
+        " frustration, anger, or disappointment (sharp tone, escalation, 'why"
+        " is this still…', public call-outs) — flag the tone explicitly."
+        " SKIP everything else: thinking out loud, musings, and suggestions or"
+        " ideas floated to the room ('I'm curious…', 'what if we…', 'we"
+        " could…'), FYIs, and general commentary — even if they sound"
+        " important and Atilio has not replied. 'Has not replied' alone is"
+        " NEVER a reason to report. Example to SKIP: 'I'm curious how far a"
+        " yolo approach would go — make a Jira per item under one epic and"
+        " spin up an agent to knock it out' is a musing to the room, not an"
+        " ask of Atilio, and shows no anger. Consecutive short posts in the"
+        " same channel are one conversation — judge them together.",
         "- **#red_alert_scout_ai post** — ANYTHING here gets reported.",
         "- **#eng-scout_errors post** — give a short assessment: what errors"
         " occurred, new vs recurring, apparent severity and customer impact,"

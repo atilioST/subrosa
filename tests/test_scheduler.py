@@ -67,6 +67,8 @@ def test_hourly_scan_prompt_scope():
     assert "slack_search_messages" not in prompt and "last_read" not in prompt
     # Brock judgment, error assessment.
     assert "frustration, anger" in prompt
+    assert "NEVER a reason to report" in prompt
+    assert "thinking out loud" in prompt and "yolo approach" in prompt
     assert "new vs recurring" in prompt
     # Header is reserved for direct asks and Brock DMs.
     assert "ONLY for" in prompt
