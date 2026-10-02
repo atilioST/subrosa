@@ -654,7 +654,7 @@ class TelegramBot:
         chat_id = update.effective_chat.id
         c = self._config
 
-        from .scheduler import _SCAN_WATERMARK_KEY, is_no_changes
+        from .scheduler import _SCAN_WATERMARK_KEY, run_alert_scan
 
         now = datetime.now(UTC)
         hours_arg = None
@@ -683,32 +683,22 @@ class TelegramBot:
         indicator = WorkingIndicator(self._app.bot, chat_id, progress=progress)
         try:
             await indicator.start()
-            from .context import build_system_prompt, build_hourly_scan_prompt
-            system_prompt = build_system_prompt(c.briefing_path)
-            prompt = await build_hourly_scan_prompt(
-                since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
-                since_date=since_local.strftime("%Y-%m-%d"),
-                lookback_minutes=int((now - since_dt).total_seconds() // 60),
-            )
-            response = await asyncio.wait_for(
-                self._agent.invoke(
-                    prompt, system_prompt,
-                    trace_name="hourly-scan-manual",
-                    max_turns=c.briefing_max_turns,
-                    progress=progress,
-                    model=c.scheduled_model,
+            outcome = await asyncio.wait_for(
+                run_alert_scan(
+                    self._agent, c, since_dt, now,
+                    trace_name="hourly-scan-manual", progress=progress,
                 ),
                 timeout=c.briefing_timeout,
             )
-            self._health.record_agent()
+            if not outcome.llm_skipped:
+                self._health.record_agent()
 
-            text = response.text.strip()
-            if not response.is_error and is_no_changes(text):
+            if not outcome.text:
                 await indicator.finalize(f"Nothing new since {since_local:%H:%M %Z}.")
                 return
 
-            await indicator.finalize(response.text)
-            if advance and not response.is_error:
+            await indicator.finalize(outcome.text)
+            if advance and outcome.advance:
                 await self._store.set_meta(_SCAN_WATERMARK_KEY, now.isoformat())
         except asyncio.TimeoutError:
             await indicator.delete()

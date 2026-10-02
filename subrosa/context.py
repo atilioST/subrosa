@@ -652,98 +652,76 @@ async def build_monitoring_prompt(
     return result
 
 
-# Atilio's identities for mention detection. Slack search does NOT match a
-# plain-text "@atilio" (his handle is ajobson) — search the user-ID mention form.
-_SLACK_USER_ID = "U06C0AXSZ45"
-_SLACK_HANDLE = "ajobson"
-_JIRA_ACCOUNT_ID = "712020:f7c4a338-b0a9-49ed-b319-92042a637410"
+_KIND_LABELS = {
+    "brock_dm": "DM from Brock",
+    "dm": "unread DM",
+    "mention": "unread @-mention",
+    "jira_mention": "Jira @-mention",
+    "brock_post": "Brock channel post",
+    "red_alert": "#red_alert_scout_ai post",
+    "error_post": "#eng-scout_errors post",
+}
 
 
-async def build_hourly_scan_prompt(
+def _format_scan_item(n: int, item, tz) -> str:
+    when = item.ts.astimezone(tz).strftime("%a %H:%M %Z")
+    head = f"[{n}] {_KIND_LABELS.get(item.kind, item.kind)} | {item.where} | {item.author} | {when}"
+    lines = [head]
+    if item.note:
+        lines.append(f"    note: {item.note}")
+    if item.permalink:
+        lines.append(f"    link: {item.permalink}")
+    body = item.text.strip() or "(no text)"
+    lines.extend("    > " + ln for ln in body.splitlines())
+    return "\n".join(lines)
+
+
+def build_hourly_scan_prompt(
+    items: list,
+    failures: dict[str, str],
     since_human: str,
-    since_date: str,
-    lookback_minutes: int = 60,
+    tz,
 ) -> str:
-    """Build prompt for the hourly alert scan (delta-only).
+    """Build the judge/summarize prompt for the hourly alert scan.
 
-    Checks since the cutoff: UNREAD Slack @-mentions and DMs, Jira @-mentions,
-    Brock posts that need a response or show anger, any activity in
-    #red_alert_scout_ai, and an assessment of new errors in #eng-scout_errors.
-    Emits the exact sentinel ``NO_CHANGES`` when nothing meets the criteria so
-    the scheduler stays silent.
+    All fetching and mechanical filtering already happened in
+    ``scan_fetch.prefetch`` (cutoff, unread vs ``last_read``, already-replied,
+    self/bot drops, name resolution). The model only judges and writes — it
+    has no tools. Emits ``NO_CHANGES`` when nothing is worth reporting so the
+    scheduler stays silent.
     """
-    # Slack's `after:` modifier is EXCLUSIVE of the date given (after:2026-07-01
-    # returns 2026-07-02 onward). To include the cutoff day itself, search from
-    # the day before, then filter precisely by real message timestamp below.
-    try:
-        after_date = (
-            datetime.strptime(since_date, "%Y-%m-%d") - timedelta(days=1)
-        ).strftime("%Y-%m-%d")
-    except ValueError:
-        after_date = since_date
-
-    # Jira JQL relative window, padded so the cutoff is always covered; the
-    # precise filter is on each comment's `created` timestamp.
-    jira_window = f"-{max(lookback_minutes, 1) + 15}m"
-
     parts = [
-        "Hourly alert scan (Slack + Jira). Report ONLY what is NEW since the"
-        " last scan and meets the criteria below. This is an alert channel, not"
-        " a digest — when in doubt, leave it out.",
+        f"Hourly alert scan (Slack + Jira) — new since {since_human}. This is an"
+        " alert channel, not a digest — when in doubt, leave it out.",
         "",
-        f"**Cutoff:** only include messages/comments posted at or after {since_human}.",
-        f"Slack: search with `after:{after_date}` (one day BEFORE the cutoff —"
-        f" Slack's `after:` is date-granular AND excludes the given day, so this"
-        f" is the correct way to capture cutoff-day messages). Then DISCARD any"
-        f" message whose actual timestamp is before {since_human}. Do NOT change"
-        f" the `after:` date to the cutoff date — that would drop today's messages.",
+        "The items below were fetched and filtered by code. They are already"
+        " restricted to the cutoff; @-mentions and DMs are already confirmed"
+        " UNREAD and NOT yet answered by Atilio; Atilio's own posts and"
+        " bot/app messages are already removed where they should be; names are"
+        " already resolved. Do not re-check any of that. You have no tools —"
+        " work only from these items.",
         "",
-        "## WHAT TO CHECK",
+        "## HOW TO JUDGE EACH KIND",
         "",
-        "1. **Unread Slack @-mentions and DMs** — Atilio is Slack user"
-        f" `{_SLACK_USER_ID}` (handle `{_SLACK_HANDLE}`).",
-        f"   - Mentions: `slack_search_messages` query `<@{_SLACK_USER_ID}> after:{after_date}`.",
-        f"   - DMs / group DMs: query `to:me after:{after_date}`. Discard messages"
-        f" sent by Atilio himself and bot/app/workflow messages.",
-        "   - **Unread filter:** for each remaining message, call"
-        " `slack_get_channel_info` (arg `channel` = the channel id; once per channel) and read"
-        " `last_read`. The message is UNREAD only if its `ts` is greater than"
-        " `last_read` (compare as numbers). Drop read messages. Also drop a"
-        " mention if Atilio has already replied after it in the same thread or"
-        " conversation. (Slack exposes no per-thread read state — use the"
-        " channel's `last_read` for thread replies too.)",
-        "   - Report every unread mention/DM that survives: who, where, and a"
-        " one-line gist of what they want.",
-        "2. **Jira @-mentions** — `jira_search` with JQL"
-        f" `comment ~ \"{_JIRA_ACCOUNT_ID}\" AND updated >= {jira_window} ORDER BY updated DESC`"
-        " and fields `key,summary,updated`. For each hit, `jira_get_issue` and"
-        f" find comments containing `[~accountid:{_JIRA_ACCOUNT_ID}]` whose"
-        f" `created` is at or after {since_human} and whose author is not"
-        " Atilio. Report the issue key, who mentioned him, and what they want."
-        " If the Jira tools are unavailable or fail, add one line saying the"
-        " Jira check could not run — do not silently skip it.",
-        "3. **Brock — only if he needs a response or is angry** — search"
-        f" `from:@mbrocklehurst after:{after_date}` (do NOT monitor anyone else"
-        " this way). Report a Brock message ONLY if (a) it asks for or clearly"
+        "- **unread @-mention / unread DM / DM from Brock** — always report:"
+        " who, where, and a one-line gist of what they want.",
+        "- **Jira @-mention** — always report: issue key, who mentioned him,"
+        " and what they want.",
+        "- **Brock channel post** — report ONLY if (a) it asks for or clearly"
         " expects a response/action from Atilio or his team — a direct question,"
-        " a request, a deadline, a decision he's waiting on — and Atilio has not"
-        " already replied; or (b) it signals frustration, anger, or"
+        " a request, a deadline, a decision he's waiting on — and the note says"
+        " Atilio has not replied; or (b) it signals frustration, anger, or"
         " disappointment (sharp tone, escalation, 'why is this still…', public"
-        " call-outs). Skip everything else, however important it sounds (any DM from"
-        " Brock is always reported via item 1). Flag"
-        " tone explicitly when (b) applies.",
-        "4. **#red_alert_scout_ai — any activity** — search"
-        f" `in:red_alert_scout_ai after:{after_date}`. ANYTHING posted in this"
-        " channel since the cutoff gets reported.",
-        "5. **#eng-scout_errors — error assessment** — search"
-        f" `in:eng-scout_errors after:{after_date}`. If there are new posts,"
-        " give a short assessment: what errors occurred, new vs recurring,"
-        " apparent severity and customer impact, and whether anything needs"
-        " action. Bot alerts in this channel carry the error details in the"
-        " message's `attachments`/`blocks_text` fields (title, error message,"
-        " culprit) — always name the actual error from there. Never describe"
-        " a message as 'automated alert' or say the content is in an"
-        " attachment. If there are no new posts, omit this section entirely.",
+        " call-outs). Skip everything else, however important it sounds. Flag"
+        " tone explicitly when (b) applies. Consecutive short posts in the same"
+        " channel are one conversation — judge them together.",
+        "- **#red_alert_scout_ai post** — ANYTHING here gets reported.",
+        "- **#eng-scout_errors post** — give a short assessment: what errors"
+        " occurred, new vs recurring, apparent severity and customer impact,"
+        " and whether anything needs action. Name the actual error from the"
+        " post text (bot alerts carry title, error message, culprit). Never"
+        " describe a post as an 'automated alert' or say the content is in an"
+        " attachment. Posts explicitly marked as tests can be one line.",
         "",
         "## OUTPUT RULES",
         "",
@@ -760,21 +738,34 @@ async def build_hourly_scan_prompt(
         " then the error assessment. Omit the header if it has no items.",
         "- OMIT any section with nothing to report — no 'no activity' lines.",
         "- 1–3 concise bullets per item. Include channel/issue and who said it.",
-        "- **People by name, never by ID.** Slack message text encodes"
-        " mentions as `<@U…>` and search results may give only a user id or"
-        " handle. Before writing the report, resolve every such id with"
-        " `slack_get_user_info` (arg `user`) and write the person's"
-        " `real_name` (e.g. `Ravi Sankar`, not `U0BEU8W7Z6X` or `ravi.s`)."
-        " Never output a raw `U…` id or a bare handle. If a lookup fails, say"
-        " `unknown user`.",
+        "- **People by real name, never by ID or handle.** Use the names as"
+        " given in the items; never output a raw `U…` id or account id.",
         "- Keep it tight and mobile-friendly. No preamble, no pleasantries.",
         "- NEVER mention sprints — Scout uses Kanban.",
+    ]
+
+    if failures:
+        parts += [
+            "",
+            "## SOURCES THAT COULD NOT BE CHECKED",
+            "",
+            *(f"- {label}: {reason}" for label, reason in failures.items()),
+            "",
+            "End the report with one line per failed source, e.g."
+            " `⚠️ Couldn't check Jira mentions: <reason>`. This line is"
+            " mandatory — a failed check must never be silent.",
+        ]
+
+    parts += ["", f"## ITEMS ({len(items)})", ""]
+    parts += [_format_scan_item(i, it, tz) for i, it in enumerate(items, 1)]
+
+    parts += [
         "",
         "## CRITICAL — DELTA SUPPRESSION",
         "",
-        "If nothing since the cutoff meets ANY of the criteria, respond with"
-        " exactly: NO_CHANGES",
+        "If none of the items is worth reporting under the rules above"
+        + (" (impossible here — a source failed, so report that)" if failures else "")
+        + ", respond with exactly: NO_CHANGES",
         "(nothing else — no explanation).",
     ]
-
     return "\n".join(parts)

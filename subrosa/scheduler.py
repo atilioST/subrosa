@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 if TYPE_CHECKING:
-    from .agent import Agent
+    from .agent import Agent, AgentResponse, InvocationProgress
     from .config import Config
     from .distiller import Distiller
     from .health import Health
@@ -52,6 +54,76 @@ async def _distill_job(distiller: Distiller, store: Store) -> None:
         await store.log_diagnostic("distiller", "scheduled run failed", level="error")
 
 
+@dataclass
+class ScanOutcome:
+    """Result of one alert scan. `text` empty → nothing to send."""
+    text: str = ""
+    is_error: bool = False
+    advance: bool = False  # move the watermark if this text is delivered
+    llm_skipped: bool = True
+    response: AgentResponse | None = None
+    counts: dict[str, int] = field(default_factory=dict)
+    failures: dict[str, str] = field(default_factory=dict)
+
+
+def _failure_notice(failures: dict[str, str]) -> str:
+    return "\n".join(f"⚠️ Couldn't check {k}: {v}" for k, v in failures.items())
+
+
+async def run_alert_scan(
+    agent: Agent,
+    config: Config,
+    since_dt: datetime,
+    now: datetime,
+    trace_name: str = "hourly-scan",
+    progress: InvocationProgress | None = None,
+) -> ScanOutcome:
+    """Prefetch in Python, then let the model judge/summarize the survivors.
+
+    Zero items and no failures → no LLM call at all (NO_CHANGES). A source
+    failure is never silent: with no items it becomes a plain notice (which
+    does not advance the watermark, so the window is retried); with items the
+    model is told to append it.
+    """
+    from zoneinfo import ZoneInfo
+
+    from .context import build_hourly_scan_prompt, build_system_prompt
+    from .scan_fetch import prefetch
+
+    fetched = await prefetch(since_dt, now)
+    out = ScanOutcome(counts=fetched.counts(), failures=dict(fetched.failures))
+
+    if not fetched.items:
+        if fetched.failures:
+            out.text = _failure_notice(fetched.failures)
+        return out
+
+    tz = ZoneInfo(config.timezone)
+    prompt = build_hourly_scan_prompt(
+        fetched.items, fetched.failures,
+        since_human=since_dt.astimezone(tz).strftime("%Y-%m-%d %H:%M %Z"), tz=tz,
+    )
+    response = await agent.invoke(
+        prompt, build_system_prompt(config.briefing_path),
+        trace_name=trace_name, max_turns=2, progress=progress,
+        model=config.scheduled_model, no_tools=True,
+    )
+    out.llm_skipped = False
+    out.response = response
+    text = response.text.strip()
+
+    if response.is_error:
+        out.is_error = True
+        out.text = response.text
+    elif is_no_changes(text):
+        if fetched.failures:
+            out.text = _failure_notice(fetched.failures)
+    else:
+        out.text = response.text
+        out.advance = True
+    return out
+
+
 async def _hourly_scan_job(
     agent: Agent,
     bot: TelegramBot,
@@ -60,13 +132,12 @@ async def _hourly_scan_job(
     config: Config,
     distiller: Distiller | None = None,
 ) -> None:
-    """Hourly Slack alert scan — sends only when something meets the criteria."""
+    """Hourly alert scan — sends only when something meets the criteria."""
     if bot.is_silenced:
         logger.info("Hourly scan skipped — silenced")
         return
 
-    from datetime import UTC, datetime, timedelta
-    from zoneinfo import ZoneInfo
+    from datetime import UTC, timedelta
 
     now = datetime.now(UTC)
     last = await store.get_meta(_SCAN_WATERMARK_KEY)
@@ -77,46 +148,33 @@ async def _hourly_scan_job(
         except ValueError:
             logger.warning("Bad scan watermark %r — falling back to interval", last)
 
-    tz = ZoneInfo(config.timezone)
-    since_local = since_dt.astimezone(tz)
-
     try:
-        from .context import build_system_prompt, build_hourly_scan_prompt
-        system_prompt = build_system_prompt(config.briefing_path)
-        prompt = await build_hourly_scan_prompt(
-            since_human=since_local.strftime("%Y-%m-%d %H:%M %Z"),
-            since_date=since_local.strftime("%Y-%m-%d"),
-            lookback_minutes=int((now - since_dt).total_seconds() // 60),
-        )
-
-        response = await asyncio.wait_for(
-            agent.invoke(
-                prompt, system_prompt,
-                trace_name="hourly-scan",
-                max_turns=config.briefing_max_turns,
-                model=config.scheduled_model,
-            ),
+        outcome = await asyncio.wait_for(
+            run_alert_scan(agent, config, since_dt, now, trace_name="hourly-scan"),
             timeout=config.briefing_timeout,
         )
-        health.record_agent()
+        if not outcome.llm_skipped:
+            health.record_agent()
 
-        text = response.text.strip()
-
-        if response.is_error:
-            logger.warning("Hourly scan agent error: %s", text[:200])
+        if outcome.is_error:
+            logger.warning("Hourly scan agent error: %s", outcome.text[:200])
             await store.log_diagnostic("scheduler", "hourly_scan error", level="error")
             return  # do not advance watermark — retry the same window next hour
 
-        if is_no_changes(text):
-            logger.info("Hourly scan — no changes since %s", since_dt.isoformat())
+        if not outcome.text:
+            logger.info(
+                "Hourly scan — no changes since %s (%s)",
+                since_dt.isoformat(), "LLM skipped" if outcome.llm_skipped else "judged",
+            )
             return  # stay silent; watermark unchanged so nothing gets skipped
 
-        await bot.send_to_chat(config.chat_id, response.text)
-        await store.set_meta(_SCAN_WATERMARK_KEY, now.isoformat())
+        await bot.send_to_chat(config.chat_id, outcome.text)
+        if outcome.advance:
+            await store.set_meta(_SCAN_WATERMARK_KEY, now.isoformat())
         await store.log_event(
             source="scheduler", event_type="hourly_scan",
             summary="hourly Slack alert scan",
-            content=response.text[:4000],
+            content=outcome.text[:4000],
         )
 
     except asyncio.TimeoutError:

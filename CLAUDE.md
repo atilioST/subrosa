@@ -17,7 +17,8 @@ It monitors Slack, Jira, and GitHub via MCP servers, generates daily briefings, 
 - `context.py` — Prompt building, memory retrieval, embeddings
 - `memory.py` — Memory extraction (explicit + implicit)
 - `media.py` — Telegram media download + prompt formatting
-- `scheduler.py` — APScheduler briefing/monitoring jobs
+- `scheduler.py` — APScheduler briefing/monitoring jobs; `run_alert_scan` (hourly scan + /digest)
+- `scan_fetch.py` — Hourly-scan prefetch: direct Slack/Jira REST (tokens from the MCP stores), all filtering in Python
 - `health.py` — Health tracking + Langfuse tracing
 - `prompt.py` — System prompt constant
 - `distiller.py` — Haiku distillation: events → structured knowledge items
