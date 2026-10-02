@@ -133,7 +133,7 @@ async def test_invoke_model_override(monkeypatch):
 
     seen = []
 
-    async def fake_run_query(self, *args):
+    async def fake_run_query(self, *args, **kwargs):
         seen.append(args[-1])
         return AgentResponse(text="ok", subtype="success")
 
@@ -150,7 +150,7 @@ async def test_unrecognized_model_falls_back_to_alias(monkeypatch):
 
     seen = []
 
-    async def fake_run_query(self, *args):
+    async def fake_run_query(self, *args, **kwargs):
         seen.append(args[-1])
         if args[-1].startswith("claude-"):
             raise _UnrecognizedModel(args[-1])

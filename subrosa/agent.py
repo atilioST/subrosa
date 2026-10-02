@@ -139,16 +139,19 @@ class Agent:
         max_turns: int | None = None,
         progress: InvocationProgress | None = None,
         model: str | None = None,
+        no_tools: bool = False,
     ) -> AgentResponse:
         """Invoke Claude. Never raises (except CancelledError) — returns
         AgentResponse with is_error on failure. Auto-continues when the CLI
         stops on the turn cap mid-task. `model` overrides self.model for this
-        call (scheduled jobs run a cheaper model than interactive questions)."""
+        call (scheduled jobs run a cheaper model than interactive questions).
+        `no_tools` disables built-in tools and all MCP servers — for prompts
+        whose data is already embedded (e.g. the prefetched alert scan)."""
         model = model or self.model
         try:
             response = await self._do_invoke(
                 prompt, system_prompt, resume_session, trace_name, trace_tags,
-                max_turns, progress, model,
+                max_turns, progress, model, no_tools,
             )
         except Exception as e:
             if resume_session:
@@ -156,7 +159,7 @@ class Agent:
                 try:
                     response = await self._do_invoke(
                         prompt, system_prompt, None, trace_name, trace_tags,
-                        max_turns, progress, model,
+                        max_turns, progress, model, no_tools,
                     )
                 except Exception as e:
                     logger.exception("Agent invocation failed (one-shot retry)")
@@ -177,7 +180,7 @@ class Agent:
                 continued = await self._do_invoke(
                     "You stopped at the turn limit mid-task. Continue and finish the task.",
                     system_prompt, response.session_id, trace_name, trace_tags,
-                    max_turns, progress, model,
+                    max_turns, progress, model, no_tools,
                 )
             except Exception:
                 logger.exception("Continuation failed — returning partial result")
@@ -196,12 +199,13 @@ class Agent:
         max_turns: int | None = None,
         progress: InvocationProgress | None = None,
         model: str | None = None,
+        no_tools: bool = False,
     ) -> AgentResponse:
         model = model or self.model
         try:
             return await self._run_query(
                 prompt, system_prompt, resume_session, trace_name, trace_tags,
-                max_turns, progress, model,
+                max_turns, progress, model, no_tools=no_tools,
             )
         except _UnrecognizedModel:
             # A full model id (claude-opus-5-5) is rejected by a CLI older than
@@ -213,7 +217,7 @@ class Agent:
             logger.warning("CLI does not know %s — retrying with alias %r", model, alias)
             return await self._run_query(
                 prompt, system_prompt, resume_session, trace_name, trace_tags,
-                max_turns, progress, alias,
+                max_turns, progress, alias, no_tools=no_tools,
             )
 
     async def _run_query(
@@ -226,6 +230,8 @@ class Agent:
         max_turns: int | None,
         progress: InvocationProgress | None,
         model: str,
+        *,
+        no_tools: bool = False,
     ) -> AgentResponse:
         stderr_lines: list[str] = []
         options = ClaudeAgentOptions(
@@ -237,6 +243,11 @@ class Agent:
             setting_sources=["user"],
             stderr=stderr_lines.append,
         )
+        if no_tools:
+            # No built-ins, and --strict-mcp-config with no --mcp-config loads
+            # zero MCP servers (faster start, nothing for the model to call).
+            options.tools = []
+            options.extra_args = {"strict-mcp-config": None}
 
         if resume_session:
             options.resume = resume_session
