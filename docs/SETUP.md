@@ -48,11 +48,10 @@ Also confirm nothing is stranded in git:
 for d in ~/Dev/subrosa ~/Dev/mcp/*; do echo "== $d"; git -C $d status -s; git -C $d log --branches --not --remotes --oneline; done
 ```
 
-> **Known stranded work (as of 2026-10-29):** `~/Dev/mcp/slack-mcp` branch
-> `feat/channel-read-state` has 3 unpushed commits (lazy caches, attachment
-> serialization, and `last_read`/`unread_count` on channel info). The hourly
-> scan's unread detection depends on them. Push that branch, or rely on the
-> bundle in the backup.
+> **slack-mcp runs from branch `feat/channel-read-state`** (pushed to
+> `sitetracker/slack-mcp`, not merged to main). It adds `last_read`/`unread_count`
+> on channel info, which the hourly scan's unread detection depends on.
+> `local/attachment-fix` holds two older experimental commits; it isn't used.
 
 ## 1. System packages (Arch)
 
@@ -76,12 +75,10 @@ git clone https://github.com/sitetracker/chorus-mcp.git
 git clone https://github.com/sitetracker/internal-salesforce-mcp-server.git   # optional
 ```
 
-If the slack-mcp branch wasn't pushed, restore it from the bundle:
+Check out the branch Subrosa needs:
 
 ```bash
-cd ~/Dev/mcp/slack-mcp
-git fetch /path/to/git/slack-mcp.unpushed.bundle feat/channel-read-state:feat/channel-read-state
-git checkout feat/channel-read-state
+git -C ~/Dev/mcp/slack-mcp checkout feat/channel-read-state
 ```
 
 Apply any `git/<repo>.uncommitted.patch` with `git apply`.
