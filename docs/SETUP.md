@@ -49,9 +49,10 @@ for d in ~/Dev/subrosa ~/Dev/mcp/*; do echo "== $d"; git -C $d status -s; git -C
 ```
 
 > **slack-mcp runs from branch `feat/channel-read-state`** (pushed to
-> `sitetracker/slack-mcp`, not merged to main). It adds `last_read`/`unread_count`
-> on channel info, which the hourly scan's unread detection depends on.
-> `local/attachment-fix` holds two older experimental commits; it isn't used.
+> `sitetracker/slack-mcp`, not merged to main), three commits on top of main:
+> attachment/Block Kit text in messages and search, lazy cache loading, and
+> `last_read`/`unread_count` on channel info (the hourly scan's unread detection
+> depends on that last one).
 
 ## 1. System packages (Arch)
 
