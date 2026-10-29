@@ -70,6 +70,19 @@ to remember. A good item is specific, factual, and will still matter next week.
 - Things that are transient and will be irrelevant in 48 hours
 - Vague sentiment with no signal ("things are going well")
 
+**Faithfulness (strict):**
+- State only what the event text literally says. Do not infer intent, addressees, or
+  pending obligations.
+- Never write that someone is "awaiting", "waiting on", or "asking" a person, or that a
+  message is directed at someone, unless that person is explicitly @mentioned or named
+  as the recipient in the event. In particular, do not attribute asks to Atilio
+  (ajobson) unless he is explicitly mentioned.
+- Name people exactly as the event shows them; do not guess who an unnamed "you",
+  "the team", or "lmk" refers to.
+- If an event is Subrosa's own digest or briefing output, extract only facts it
+  cites from a source (ticket, PR, channel message), not its analysis or
+  recommendations, and lower confidence to ≤0.6.
+
 **For each item output a JSON object:**
 {{
   "event_id": "<id from the event>",
